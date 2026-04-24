@@ -1,0 +1,83 @@
+version: "3.9"
+
+# All services share this bridge network.
+# Docker Compose assigns each container a DNS name matching its service key
+# (e.g. "core-service" resolves to the core-service container's IP).
+networks:
+  healing-net:
+    driver: bridge
+
+services:
+
+  # ── core-service ─────────────────────────────────────────────────────────────
+  core-service:
+    build:
+      context: ./core-service
+      dockerfile: Dockerfile
+    container_name: core-service
+    ports:
+      - "8001:8001"           # host:container — reachable at localhost:8001
+    environment:
+      SERVICE_NAME: "core-service"
+      SLOW_DELAY_SECONDS: "5.0"
+    networks:
+      - healing-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 8s
+
+  # ── fallback-service ─────────────────────────────────────────────────────────
+  fallback-service:
+    build:
+      context: ./fallback-service
+      dockerfile: Dockerfile
+    container_name: fallback-service
+    ports:
+      - "8002:8002"
+    environment:
+      SERVICE_NAME: "fallback-service"
+    networks:
+      - healing-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 8s
+
+  # ── api-service ───────────────────────────────────────────────────────────────
+  # Waits for core-service and fallback-service to be healthy before starting.
+  api-service:
+    build:
+      context: ./api-service
+      dockerfile: Dockerfile
+    container_name: api-service
+    ports:
+      - "8000:8000"
+    environment:
+      SERVICE_NAME: "api-service"
+      CORE_SERVICE_URL: "http://core-service:8001"      # Docker DNS name
+      FALLBACK_SERVICE_URL: "http://fallback-service:8002"
+      REQUEST_TIMEOUT: "3.0"
+    networks:
+      - healing-net
+    depends_on:
+      core-service:
+        condition: service_healthy
+      fallback-service:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 8s

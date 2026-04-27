@@ -1,0 +1,3 @@
+# Lambda uses only Python standard library (urllib) — no extra packages needed.
+# If you switch to requests or httpx in recovery_handler.py, add them here
+# and include them in the deployment zip.

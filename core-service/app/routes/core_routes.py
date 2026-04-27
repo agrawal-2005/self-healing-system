@@ -5,7 +5,7 @@ Every handler delegates immediately to CoreService.
 No logic lives here — just HTTP plumbing.
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 
 from app.dependencies import get_core_service
 from app.models.schemas import (
@@ -21,9 +21,12 @@ router = APIRouter()
 
 
 @router.get("/health", response_model=HealthResponse, summary="Health check")
-async def health(service: CoreService = Depends(get_core_service)):
-    """Returns 200 when healthy, 503 would require custom exception handling (left for Phase 2)."""
-    return service.health()
+async def health(response: Response, service: CoreService = Depends(get_core_service)):
+    """Returns 200 when healthy, 503 when crashed or in failure state."""
+    result = service.health()
+    if result.status != "healthy":
+        response.status_code = 503
+    return result
 
 
 @router.get("/work", response_model=WorkResponse, summary="Main work endpoint")

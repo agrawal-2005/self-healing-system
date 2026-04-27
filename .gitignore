@@ -13,5 +13,9 @@ venv/
 # Docker
 *.log
 
+# Lambda build artifacts — not needed in source control
+*.zip
+lambda-package/
+
 # macOS
 .DS_Store

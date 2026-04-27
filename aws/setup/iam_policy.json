@@ -1,0 +1,68 @@
+{
+  "_comment": "Minimal IAM policy for the Lambda execution role.",
+
+  "LambdaExecutionRole": {
+    "TrustPolicy": {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Principal": { "Service": "lambda.amazonaws.com" },
+          "Action": "sts:AssumeRole"
+        }
+      ]
+    },
+    "PermissionsPolicy": {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "_comment": "Allow Lambda to write its own logs to CloudWatch",
+          "Effect": "Allow",
+          "Action": [
+            "logs:CreateLogGroup",
+            "logs:CreateLogStream",
+            "logs:PutLogEvents"
+          ],
+          "Resource": "arn:aws:logs:*:*:*"
+        }
+      ]
+    }
+  },
+
+  "EventBridgeInvokeLambdaPolicy": {
+    "_comment": "Attach to EventBridge service principal — allows the rule to trigger the Lambda",
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Principal": { "Service": "events.amazonaws.com" },
+        "Action": "lambda:InvokeFunction",
+        "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:SelfHealingRecoveryHandler",
+        "Condition": {
+          "ArnLike": {
+            "AWS:SourceArn": "arn:aws:events:REGION:ACCOUNT_ID:rule/SelfHealingFailureRule"
+          }
+        }
+      }
+    ]
+  },
+
+  "MonitorIAMUser": {
+    "_comment": "If monitor runs locally (not on EC2), create an IAM user with these permissions",
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "_comment": "Allow monitor to publish events to EventBridge",
+        "Effect": "Allow",
+        "Action": "events:PutEvents",
+        "Resource": "arn:aws:events:REGION:ACCOUNT_ID:event-bus/default"
+      },
+      {
+        "_comment": "Allow monitor to publish CloudWatch metrics (only needed if CLOUDWATCH_ENABLED=true)",
+        "Effect": "Allow",
+        "Action": "cloudwatch:PutMetricData",
+        "Resource": "*"
+      }
+    ]
+  }
+}

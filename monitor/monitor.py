@@ -1,110 +1,84 @@
 """
-Phase 1 Health Monitor
-----------------------
-Pings the /health endpoint of each service every CHECK_INTERVAL seconds.
-Measures response latency and prints colour-coded logs to the terminal.
-No AWS integration — local only.
+monitor.py — entry point for the class-based monitor.
+
+This file:
+  1. Reads settings.
+  2. Builds all class instances (wiring / DI).
+  3. Starts the MonitorService main loop.
+
+No business logic lives here — only construction and startup.
 """
 
-import time
-import os
 import logging
-import requests
+
+from app.checkers.health_checker import HealthChecker
+from app.checkers.latency_checker import LatencyChecker
+from app.config.settings import settings
+from app.publishers.cloudwatch_publisher import CloudWatchMetricsPublisher
+from app.publishers.eventbridge_publisher import EventBridgePublisher
+from app.services.monitor_service import MonitorService
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [monitor] %(levelname)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+
 logger = logging.getLogger(__name__)
 
-# ── Configuration ──────────────────────────────────────────────────────────────
-SERVICES = {
-    "api-service":      os.getenv("API_SERVICE_URL",      "http://localhost:8000"),
-    "core-service":     os.getenv("CORE_SERVICE_URL",     "http://localhost:8001"),
-    "fallback-service": os.getenv("FALLBACK_SERVICE_URL", "http://localhost:8002"),
-}
 
-CHECK_INTERVAL   = int(float(os.getenv("CHECK_INTERVAL",   "5")))   # seconds between rounds
-LATENCY_WARN_MS  = int(float(os.getenv("LATENCY_WARN_MS",  "500"))) # warn if response > this
-REQUEST_TIMEOUT  = float(os.getenv("REQUEST_TIMEOUT", "3.0"))
+def build_monitor() -> MonitorService:
+    """
+    Construct and wire all monitor components.
 
-# Simple ANSI colours (works in most terminals)
-GREEN  = "\033[92m"
-YELLOW = "\033[93m"
-RED    = "\033[91m"
-RESET  = "\033[0m"
+    Reading the constructor arguments here (not inside each class) means
+    you can see the full dependency graph at a glance.
+    """
+    services = {
+        "api-service":      settings.api_service_url,
+        "core-service":     settings.core_service_url,
+        "fallback-service": settings.fallback_service_url,
+    }
 
+    health_checker = HealthChecker(
+        timeout_seconds=settings.request_timeout_seconds,
+    )
 
-def check_service(name: str, base_url: str) -> dict:
-    url = f"{base_url}/health"
-    start = time.monotonic()
-    try:
-        resp = requests.get(url, timeout=REQUEST_TIMEOUT)
-        latency_ms = (time.monotonic() - start) * 1000
+    latency_checker = LatencyChecker(
+        warn_ms=settings.latency_warn_ms,
+        slow_ms=settings.latency_slow_ms,
+    )
 
-        if resp.status_code == 200:
-            status = "UP"
-        else:
-            status = f"DEGRADED (HTTP {resp.status_code})"
+    eventbridge_publisher = EventBridgePublisher(
+        region      = settings.aws_region,
+        event_bus   = settings.eventbridge_event_bus,
+        source      = settings.eventbridge_source,
+        detail_type = settings.eventbridge_detail_type,
+        dry_run     = settings.dry_run or not settings.eventbridge_enabled,
+    )
 
-    except requests.exceptions.Timeout:
-        latency_ms = REQUEST_TIMEOUT * 1000
-        status = "TIMEOUT"
+    cloudwatch_publisher = CloudWatchMetricsPublisher(
+        region  = settings.aws_region,
+        enabled = settings.cloudwatch_enabled,
+    )
 
-    except requests.exceptions.ConnectionError:
-        latency_ms = (time.monotonic() - start) * 1000
-        status = "DOWN"
-
-    except Exception as exc:
-        latency_ms = (time.monotonic() - start) * 1000
-        status = f"ERROR ({exc})"
-
-    return {"name": name, "url": url, "status": status, "latency_ms": round(latency_ms, 1)}
-
-
-def log_result(result: dict):
-    name       = result["name"]
-    status     = result["status"]
-    latency_ms = result["latency_ms"]
-
-    if status == "UP":
-        if latency_ms > LATENCY_WARN_MS:
-            colour = YELLOW
-            tag    = "SLOW"
-        else:
-            colour = GREEN
-            tag    = "OK"
-    else:
-        colour = RED
-        tag    = "FAIL"
-
-    logger.info(
-        f"{colour}[{tag}]{RESET} {name:20s}  status={status:25s}  latency={latency_ms:.1f}ms"
+    return MonitorService(
+        services              = services,
+        health_checker        = health_checker,
+        latency_checker       = latency_checker,
+        eventbridge_publisher = eventbridge_publisher,
+        cloudwatch_publisher  = cloudwatch_publisher,
+        check_interval        = settings.check_interval_seconds,
+        cooldown_seconds      = settings.event_cooldown_seconds,
     )
 
 
-def run():
-    logger.info("Starting health monitor — checking every %ds", CHECK_INTERVAL)
-    logger.info("Services: %s", list(SERVICES.keys()))
-    logger.info("-" * 70)
-
-    while True:
-        print()  # blank line between rounds for readability
-        results = [check_service(name, url) for name, url in SERVICES.items()]
-        for r in results:
-            log_result(r)
-
-        # Summary line
-        up_count = sum(1 for r in results if r["status"] == "UP")
-        total    = len(results)
-        if up_count == total:
-            logger.info(f"{GREEN}All {total}/{total} services healthy{RESET}")
-        else:
-            logger.warning(f"{RED}{up_count}/{total} services healthy — check above for failures{RESET}")
-
-        time.sleep(CHECK_INTERVAL)
-
-
 if __name__ == "__main__":
-    run()
+    logger.info("=== Self-Healing Monitor (Phase 2) ===")
+    logger.info("EventBridge: %s", "ENABLED" if settings.eventbridge_enabled else "DISABLED")
+    logger.info("CloudWatch:  %s", "ENABLED" if settings.cloudwatch_enabled else "DISABLED")
+    logger.info("Dry run:     %s", settings.dry_run)
+    logger.info("=" * 40)
+
+    monitor = build_monitor()
+    monitor.run()

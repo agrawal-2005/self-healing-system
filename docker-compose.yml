@@ -1,8 +1,5 @@
 version: "3.9"
 
-# All services share this bridge network.
-# Docker Compose assigns each container a DNS name matching its service key
-# (e.g. "core-service" resolves to the core-service container's IP).
 networks:
   healing-net:
     driver: bridge
@@ -16,7 +13,7 @@ services:
       dockerfile: Dockerfile
     container_name: core-service
     ports:
-      - "8001:8001"           # host:container — reachable at localhost:8001
+      - "8001:8001"
     environment:
       SERVICE_NAME: "core-service"
       SLOW_DELAY_SECONDS: "5.0"
@@ -53,7 +50,6 @@ services:
       start_period: 8s
 
   # ── api-service ───────────────────────────────────────────────────────────────
-  # Waits for core-service and fallback-service to be healthy before starting.
   api-service:
     build:
       context: ./api-service
@@ -63,7 +59,7 @@ services:
       - "8000:8000"
     environment:
       SERVICE_NAME: "api-service"
-      CORE_SERVICE_URL: "http://core-service:8001"      # Docker DNS name
+      CORE_SERVICE_URL: "http://core-service:8001"
       FALLBACK_SERVICE_URL: "http://fallback-service:8002"
       REQUEST_TIMEOUT: "3.0"
     networks:
@@ -81,3 +77,35 @@ services:
       timeout: 3s
       retries: 3
       start_period: 8s
+
+  # ── recovery-agent ────────────────────────────────────────────────────────────
+  # Mounts the host Docker socket so it can run "docker restart/stop/start".
+  # WARNING: mounting /var/run/docker.sock gives this container full control
+  # over the host Docker daemon.  Acceptable for local dev; harden in production.
+  recovery-agent:
+    build:
+      context: ./recovery-agent
+      dockerfile: Dockerfile
+    container_name: recovery-agent
+    ports:
+      - "8003:8003"
+    environment:
+      SERVICE_NAME: "recovery-agent"
+      DOCKER_COMMAND_TIMEOUT: "30"
+    volumes:
+      # Mount the host Docker socket — required for docker CLI to work inside container
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - healing-net
+    depends_on:
+      - api-service
+      - core-service
+      - fallback-service
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s

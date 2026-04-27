@@ -1,0 +1,29 @@
+{
+  "_comment": "Reference document for creating the EventBridge rule via AWS Console or CLI.",
+
+  "RuleName": "SelfHealingFailureRule",
+  "Description": "Triggers SelfHealingRecoveryHandler Lambda when monitor detects a service failure",
+  "EventBusName": "default",
+  "State": "ENABLED",
+
+  "EventPattern": {
+    "_comment": "Matches ONLY events where source is selfhealing.local AND detail-type is ServiceFailureDetected",
+    "source": ["selfhealing.local"],
+    "detail-type": ["ServiceFailureDetected"]
+  },
+
+  "Target": {
+    "Id": "SelfHealingLambdaTarget",
+    "Arn": "arn:aws:lambda:REGION:ACCOUNT_ID:function:SelfHealingRecoveryHandler"
+  },
+
+  "CLICommands": {
+    "_comment": "Run these commands to create the rule and add the Lambda target",
+
+    "1_create_rule": "aws events put-rule --name SelfHealingFailureRule --event-pattern '{\"source\":[\"selfhealing.local\"],\"detail-type\":[\"ServiceFailureDetected\"]}' --state ENABLED --region REGION",
+
+    "2_add_lambda_permission": "aws lambda add-permission --function-name SelfHealingRecoveryHandler --statement-id EventBridgeInvoke --action lambda:InvokeFunction --principal events.amazonaws.com --source-arn arn:aws:events:REGION:ACCOUNT_ID:rule/SelfHealingFailureRule --region REGION",
+
+    "3_add_target": "aws events put-targets --rule SelfHealingFailureRule --targets '[{\"Id\":\"SelfHealingLambdaTarget\",\"Arn\":\"arn:aws:lambda:REGION:ACCOUNT_ID:function:SelfHealingRecoveryHandler\"}]' --region REGION"
+  }
+}

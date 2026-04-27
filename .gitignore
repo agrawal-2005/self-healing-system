@@ -24,3 +24,6 @@ recovery-agent/data/*.jsonl
 
 # macOS
 .DS_Store
+
+# Claude Code internal state
+.claude/

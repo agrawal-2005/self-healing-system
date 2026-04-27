@@ -425,7 +425,7 @@ else
 fi
 
 check_step
-TOKEN_ERROR=$(docker logs recovery-agent 2>&1 | grep -E "401|403|Invalid.*token" | tail -1 || echo "")
+TOKEN_ERROR=$(docker logs recovery-agent 2>&1 | grep -E "HTTP 40[13]|\"status_code\": 40[13]|Invalid.*[Tt]oken|Unauthorized|Forbidden|not in allowed" | tail -1 || echo "")
 if [ -z "$TOKEN_ERROR" ]; then
   pass "No token or allowlist rejections — security checks passed"
 else

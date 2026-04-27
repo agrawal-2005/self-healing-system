@@ -1,14 +1,20 @@
 """
 CloudWatchMetricsPublisher — records custom metrics to AWS CloudWatch.
 
-This is OPTIONAL.  Enable it by setting CLOUDWATCH_ENABLED=true.
-When disabled, every method is a no-op so the rest of the monitor code
-does not need to check a flag.
+Enable with CLOUDWATCH_ENABLED=true in monitor/.env.
+When disabled, every method is a no-op — no code changes needed in callers.
 
-Metrics published:
-  CoreServiceFailureCount  — incremented each time a failure event fires
-  RecoveryActionCount      — incremented each time a recovery event fires
-  (namespace: SelfHealingSystem)
+Metrics published (namespace: SelfHealingSystem):
+  FailureDetectedCount   — each time monitor detects a service failure
+  RecoverySuccessCount   — each time Lambda recovery succeeds
+  RecoveryFailureCount   — each time Lambda recovery fails
+  CircuitBreakerOpenCount — each time circuit breaker opens (from api-service logs, future)
+  FallbackUsedCount      — each time api-service falls back to fallback-service
+
+Why custom metrics?
+  These let you build CloudWatch dashboards and alarms, e.g.:
+  "Alert me if FailureDetectedCount > 5 in 10 minutes"
+  "Alert me if RecoveryFailureCount > 0 in any period"
 """
 
 import logging
@@ -31,8 +37,62 @@ class CloudWatchMetricsPublisher:
             self._client = None
             logger.info("CloudWatchMetricsPublisher: disabled — metrics will not be sent")
 
+    # ── public metrics ────────────────────────────────────────────────────────
+
+    def record_failure_detected(self, service_name: str) -> None:
+        """Call when monitor detects a service failure and publishes an event."""
+        self._put(
+            metric_name="FailureDetectedCount",
+            value=1,
+            dimensions=[{"Name": "ServiceName", "Value": service_name}],
+        )
+
+    def record_recovery_success(self, service_name: str) -> None:
+        """Call when a Lambda-triggered recovery action succeeds."""
+        self._put(
+            metric_name="RecoverySuccessCount",
+            value=1,
+            dimensions=[{"Name": "ServiceName", "Value": service_name}],
+        )
+
+    def record_recovery_failure(self, service_name: str) -> None:
+        """Call when a Lambda-triggered recovery action fails."""
+        self._put(
+            metric_name="RecoveryFailureCount",
+            value=1,
+            dimensions=[{"Name": "ServiceName", "Value": service_name}],
+        )
+
+    def record_circuit_open(self, service_name: str) -> None:
+        """Call when the circuit breaker opens for a service."""
+        self._put(
+            metric_name="CircuitBreakerOpenCount",
+            value=1,
+            dimensions=[{"Name": "ServiceName", "Value": service_name}],
+        )
+
+    def record_fallback_used(self, service_name: str) -> None:
+        """Call when api-service falls back to fallback-service."""
+        self._put(
+            metric_name="FallbackUsedCount",
+            value=1,
+            dimensions=[{"Name": "ServiceName", "Value": service_name}],
+        )
+
+    # ── backward-compat aliases (used in Phase 2 code) ────────────────────────
+
+    def record_failure(self, service_name: str) -> None:
+        """Alias for record_failure_detected — keeps Phase 2 callers working."""
+        self.record_failure_detected(service_name)
+
+    def record_recovery(self, service_name: str) -> None:
+        """Alias for record_recovery_success — keeps Phase 2 callers working."""
+        self.record_recovery_success(service_name)
+
+    # ── internal ──────────────────────────────────────────────────────────────
+
     def _put(self, metric_name: str, value: float, dimensions: list[dict]) -> None:
-        """Internal helper. Skips silently if CloudWatch is disabled."""
+        """Send one metric data point. Skips silently if CloudWatch is disabled."""
         if not self.enabled:
             return
         try:
@@ -47,24 +107,7 @@ class CloudWatchMetricsPublisher:
                     }
                 ],
             )
+            logger.debug("CloudWatch: %s +1 for %s", metric_name, dimensions)
         except (ClientError, BotoCoreError) as exc:
             # Never crash the monitor over a metrics failure
             logger.warning("CloudWatchMetricsPublisher: put_metric_data failed — %s", exc)
-
-    def record_failure(self, service_name: str) -> None:
-        """Increment CoreServiceFailureCount for the given service."""
-        logger.debug("CloudWatch: recording failure for %s", service_name)
-        self._put(
-            metric_name="CoreServiceFailureCount",
-            value=1,
-            dimensions=[{"Name": "ServiceName", "Value": service_name}],
-        )
-
-    def record_recovery(self, service_name: str) -> None:
-        """Increment RecoveryActionCount for the given service."""
-        logger.debug("CloudWatch: recording recovery for %s", service_name)
-        self._put(
-            metric_name="RecoveryActionCount",
-            value=1,
-            dimensions=[{"Name": "ServiceName", "Value": service_name}],
-        )

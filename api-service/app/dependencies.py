@@ -14,6 +14,7 @@ from app.clients.core_client import CoreClient
 from app.clients.fallback_client import FallbackClient
 from app.config.settings import settings
 from app.services.api_service import ApiService
+from app.services.circuit_breaker import CircuitBreaker
 
 # ── Singletons ────────────────────────────────────────────────────────────────
 # Created once when the module is first imported.
@@ -28,10 +29,17 @@ _fallback_client = FallbackClient(
     timeout=settings.request_timeout,
 )
 
+circuit_breaker = CircuitBreaker(
+    failure_threshold=settings.circuit_failure_threshold,
+    recovery_timeout_seconds=settings.circuit_recovery_timeout_seconds,
+    half_open_max_calls=settings.circuit_half_open_max_calls,
+)
+
 _api_service = ApiService(
     core_client=_core_client,
     fallback_client=_fallback_client,
     service_name=settings.service_name,
+    circuit_breaker=circuit_breaker,
 )
 
 

@@ -19,9 +19,9 @@ import logging
 from app.clients.core_client import CoreClient
 from app.clients.fallback_client import FallbackClient
 from app.models.schemas import HealthResponse, ProcessResponse
+from app.services.circuit_breaker import CircuitBreaker
 
 logger = logging.getLogger(__name__)
-
 
 class ApiService:
     def __init__(
@@ -29,6 +29,7 @@ class ApiService:
         core_client: CoreClient,
         fallback_client: FallbackClient,
         service_name: str,
+        circuit_breaker: CircuitBreaker,
     ) -> None:
         """
         Dependencies are injected, not created here.
@@ -36,9 +37,10 @@ class ApiService:
         This means ApiService works with any CoreClient / FallbackClient
         implementation — the real one, or a test double.
         """
-        self.core_client = core_client
+        self.core_client     = core_client
         self.fallback_client = fallback_client
-        self.service_name = service_name
+        self.service_name    = service_name
+        self.circuit_breaker = circuit_breaker
 
     async def process(self) -> ProcessResponse:
         """
@@ -50,9 +52,19 @@ class ApiService:
           3. If core-service raises ANY exception → log it, try fallback.
           4. If fallback also fails → re-raise so the route layer returns 503.
         """
+
+        if not self.circuit_breaker.can_call_core():
+          logger.warning("Circuit OPEN — skipping core-service, using fallback directly.")
+          fallback = await self.fallback_client.get_fallback()
+          return ProcessResponse(
+            source="fallback-service",
+            result=fallback.model_dump(),
+            degraded=True,
+          )
         # ── Step 1: try core-service ─────────────────────────────────────────
         try:
             work = await self.core_client.get_work()
+            self.circuit_breaker.record_success()
             logger.info("process(): core-service OK — source=core-service")
             return ProcessResponse(
                 source="core-service",
@@ -62,6 +74,7 @@ class ApiService:
         except Exception as exc:
             # Covers: 5xx from core, timeout, connection refused, etc.
             logger.warning("process(): core-service failed (%s). Switching to fallback.", exc)
+            self.circuit_breaker.record_failure()
 
         # ── Step 2: try fallback-service ─────────────────────────────────────
         # If this raises, the exception propagates up to the route handler,

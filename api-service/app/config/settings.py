@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     # How long (seconds) to wait for a downstream response before giving up
     request_timeout: float = 3.0
 
+    circuit_failure_threshold: int = 3
+    circuit_recovery_timeout_seconds: int = 30
+    circuit_half_open_max_calls: int = 1
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 

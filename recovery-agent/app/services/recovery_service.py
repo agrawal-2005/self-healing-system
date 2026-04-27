@@ -1,54 +1,76 @@
 """
 RecoveryService — business logic for recovery actions.
 
-This class owns the DECISION: given an ActionType, which Docker command runs?
-
 Action → Docker command mapping:
   RESTART_SERVICE  → docker restart {target}
     Use case: core-service crashed or is in a bad state. Restart it.
-    api-service will automatically resume using it once it is healthy.
 
   ENABLE_FALLBACK  → docker stop {target}
-    Use case: core-service is too slow or unreliable and should be taken
-    offline deliberately. Stopping the container forces api-service to
-    route all requests to fallback-service.
+    Use case: core-service is too slow or unreliable. Stop it to force
+    api-service to route all traffic to fallback-service.
 
   DISABLE_FALLBACK → docker start {target}
-    Use case: core-service has been fixed/patched offline. Bring it back.
-    api-service will detect it as healthy and resume normal routing.
+    Use case: core-service has been fixed. Bring it back online.
+
+Security: only services in allowed_services may be acted on (checked here).
+History:  every action (success or failure) is appended to the JSONL log.
+Timing:   recovery_duration_ms measures how long the docker command took.
 """
 
 import logging
+import time
 from datetime import datetime, timezone
+
+from fastapi import HTTPException
 
 from app.models.schemas import ActionRequest, ActionResponse, ActionType, HealthResponse
 from app.services.docker_executor import DockerExecutor
+from app.services.recovery_history import IncidentRecord, RecoveryHistoryRepository
 
 logger = logging.getLogger(__name__)
 
 
 class RecoveryService:
-    def __init__(self, docker_executor: DockerExecutor, service_name: str) -> None:
-        self.docker_executor = docker_executor
-        self.service_name = service_name
+    def __init__(
+        self,
+        docker_executor: DockerExecutor,
+        service_name: str,
+        allowed_services: list[str],
+        history_repository: RecoveryHistoryRepository,
+    ) -> None:
+        self.docker_executor    = docker_executor
+        self.service_name       = service_name
+        self.allowed_services   = allowed_services
+        self.history_repository = history_repository
 
     def health(self) -> HealthResponse:
         return HealthResponse(status="healthy", service=self.service_name)
 
     def execute_action(self, request: ActionRequest) -> ActionResponse:
         """
-        Route the incoming action to the correct private handler.
+        Route the incoming action to the correct private handler,
+        measure how long it takes, then write a record to history.
 
-        Using a dict of handlers (instead of if/elif) means adding a new
-        action type only requires adding one entry here — no existing code
-        changes needed.
+        Order matters:
+          1. Validate the target service against the allowlist.
+          2. Execute the docker command (handler returns ActionResponse).
+          3. THEN write history — response must exist before we record it.
+          4. Return the response.
         """
         logger.info(
             "RecoveryService: action=%s  target=%s  reason=%r",
-            request.action,
-            request.target_service,
-            request.reason,
+            request.action, request.target_service, request.reason,
         )
+
+        # ── Security: allowlist check ──────────────────────────────────────────
+        if request.target_service not in self.allowed_services:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"Service '{request.target_service}' is not in the allowed list. "
+                    f"Allowed: {self.allowed_services}"
+                ),
+            )
 
         handlers = {
             ActionType.RESTART_SERVICE:  self._restart_service,
@@ -57,7 +79,29 @@ class RecoveryService:
         }
 
         handler = handlers[request.action]
-        return handler(request)
+
+        # ── Execute and measure duration ───────────────────────────────────────
+        t_start  = time.monotonic()
+        response = handler(request)                            # ← execute FIRST
+        duration = (time.monotonic() - t_start) * 1000        # convert to ms
+
+        # ── Write to history AFTER response exists ─────────────────────────────
+        record = IncidentRecord(
+            timestamp            = response.timestamp,
+            service_name         = request.target_service,
+            failure_type         = request.reason,             # reason carries failure context
+            action               = request.action.value,
+            success              = response.success,
+            message              = response.message,
+            recovery_duration_ms = round(duration, 2),
+            reason               = request.reason,
+            stdout  = response.command_result.stdout     if response.command_result else None,
+            stderr  = response.command_result.stderr     if response.command_result else None,
+            returncode = response.command_result.returncode if response.command_result else None,
+        )
+        self.history_repository.write_record(record)
+
+        return response
 
     # ── action handlers ───────────────────────────────────────────────────────
 
@@ -70,26 +114,21 @@ class RecoveryService:
             message=(
                 f"Container '{request.target_service}' restarted successfully."
                 if cmd_result.success
-                else f"Failed to restart '{request.target_service}'. See command_result for details."
+                else f"Failed to restart '{request.target_service}'. See command_result."
             ),
             command_result=cmd_result,
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
 
     def _enable_fallback(self, request: ActionRequest) -> ActionResponse:
-        """
-        Stop the target container.
-        api-service detects the connection refused on /work and automatically
-        routes to fallback-service — no code changes needed in api-service.
-        """
+        """Stop the target container to force api-service to use fallback-service."""
         cmd_result = self.docker_executor.stop(request.target_service)
         return ActionResponse(
             success=cmd_result.success,
             action=request.action,
             target_service=request.target_service,
             message=(
-                f"Fallback enabled: '{request.target_service}' stopped. "
-                "api-service will route all traffic to fallback-service."
+                f"Fallback enabled: '{request.target_service}' stopped."
                 if cmd_result.success
                 else f"Failed to stop '{request.target_service}'."
             ),
@@ -98,9 +137,7 @@ class RecoveryService:
         )
 
     def _disable_fallback(self, request: ActionRequest) -> ActionResponse:
-        """
-        Start the target container to restore normal routing.
-        """
+        """Start the target container to restore normal routing."""
         cmd_result = self.docker_executor.start(request.target_service)
         return ActionResponse(
             success=cmd_result.success,

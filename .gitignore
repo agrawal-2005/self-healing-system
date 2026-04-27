@@ -17,5 +17,8 @@ venv/
 *.zip
 lambda-package/
 
+# Recovery agent runtime data — keep the directory, ignore the data files
+recovery-agent/data/*.jsonl
+
 # macOS
 .DS_Store

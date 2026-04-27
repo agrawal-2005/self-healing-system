@@ -24,6 +24,7 @@ from app.checkers.latency_checker import LatencyChecker
 from app.models.schemas import FailureEvent, HealthCheckResult, ServiceStatus
 from app.publishers.cloudwatch_publisher import CloudWatchMetricsPublisher
 from app.publishers.eventbridge_publisher import EventBridgePublisher
+from app.services.event_cooldown import EventCooldown
 
 logger = logging.getLogger(__name__)
 
@@ -34,34 +35,34 @@ _RED    = "\033[91m"
 _RESET  = "\033[0m"
 
 
-class _EventCooldown:
-    """
-    Prevents duplicate events for the same service+failure_type within a window.
+# class _EventCooldown:
+#     """
+#     Prevents duplicate events for the same service+failure_type within a window.
 
-    Example: if core-service crashes at 10:00:00 and is still down at 10:00:05,
-    we should NOT send a second "crash" event.  We wait until cooldown expires,
-    then send one more.  This keeps Lambda invocation count low.
-    """
+#     Example: if core-service crashes at 10:00:00 and is still down at 10:00:05,
+#     we should NOT send a second "crash" event.  We wait until cooldown expires,
+#     then send one more.  This keeps Lambda invocation count low.
+#     """
 
-    def __init__(self, cooldown_seconds: int) -> None:
-        self.cooldown_seconds = cooldown_seconds
-        # key: "service_name:failure_type"  value: monotonic time of last send
-        self._last_sent: dict[str, float] = {}
+#     def __init__(self, cooldown_seconds: int) -> None:
+#         self.cooldown_seconds = cooldown_seconds
+#         # key: "service_name:failure_type"  value: monotonic time of last send
+#         self._last_sent: dict[str, float] = {}
 
-    def should_send(self, service_name: str, failure_type: str) -> bool:
-        key = f"{service_name}:{failure_type}"
-        now = time.monotonic()
-        last = self._last_sent.get(key)
-        if last is None or (now - last) >= self.cooldown_seconds:
-            self._last_sent[key] = now
-            return True
-        return False
+#     def should_send(self, service_name: str, failure_type: str) -> bool:
+#         key = f"{service_name}:{failure_type}"
+#         now = time.monotonic()
+#         last = self._last_sent.get(key)
+#         if last is None or (now - last) >= self.cooldown_seconds:
+#             self._last_sent[key] = now
+#             return True
+#         return False
 
-    def clear(self, service_name: str) -> None:
-        """Called when a service recovers — allows a fresh event on next failure."""
-        keys = [k for k in self._last_sent if k.startswith(f"{service_name}:")]
-        for k in keys:
-            del self._last_sent[k]
+#     def clear(self, service_name: str) -> None:
+#         """Called when a service recovers — allows a fresh event on next failure."""
+#         keys = [k for k in self._last_sent if k.startswith(f"{service_name}:")]
+#         for k in keys:
+#             del self._last_sent[k]
 
 
 class MonitorService:
@@ -92,7 +93,7 @@ class MonitorService:
         self.eventbridge_publisher = eventbridge_publisher
         self.cloudwatch_publisher  = cloudwatch_publisher
         self.check_interval        = check_interval
-        self._cooldown             = _EventCooldown(cooldown_seconds)
+        self._cooldown             = EventCooldown(cooldown_seconds)
 
     # ── public ────────────────────────────────────────────────────────────────
 
@@ -139,22 +140,27 @@ class MonitorService:
         if self.latency_checker.is_failure(result):
             failure_type = self.latency_checker.failure_type(result)
 
-            if self._cooldown.should_send(result.service_name, failure_type):
-                event = FailureEvent(
-                    service_name  = result.service_name,
-                    failure_type  = failure_type,
-                    latency_ms    = result.latency_ms,
-                    timestamp     = result.timestamp,
-                    health_endpoint = result.url,
-                )
-                published = self.eventbridge_publisher.publish(event)
-                if published:
-                    self.cloudwatch_publisher.record_failure(result.service_name)
-            else:
-                logger.debug(
-                    "MonitorService [%s]: skipping duplicate event (cooldown active)",
+            if not self._cooldown.should_send(result.service_name, failure_type):
+                logger.info(
+                    "Suppressing duplicate event service=%s failure=%s due to cooldown",
                     result.service_name,
+                    failure_type,
                 )
+                return
+
+            # If we reach here → event should be sent
+            event = FailureEvent(
+                service_name=result.service_name,
+                failure_type=failure_type,
+                latency_ms=result.latency_ms,
+                timestamp=result.timestamp,
+                health_endpoint=result.url,
+            )
+
+            published = self.eventbridge_publisher.publish(event)
+
+            if published:
+                self.cloudwatch_publisher.record_failure(result.service_name)
         else:
             # Service is healthy — clear cooldown so next failure creates a fresh event
             self._cooldown.clear(result.service_name)

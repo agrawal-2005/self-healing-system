@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     # Seconds to wait before killing a hung docker command
     docker_command_timeout: int = 30
 
+    recovery_token: str = "dev-token"
+    allowed_services: str = "core-service"
+    recovery_history_path: str = "/app/data/recovery_history.jsonl"
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 

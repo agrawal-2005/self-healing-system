@@ -28,9 +28,20 @@ class IncidentRecord(BaseModel):
 
     Stored as one JSON line in the JSONL history file.
     Every field has a type so you can read them back with full validation.
+
+    Phase 5 fields (core):
+      timestamp, service_name, failure_type, action, success, message,
+      recovery_duration_ms, reason, stdout, stderr, returncode
+
+    Phase 6 fields (optional — None when event comes from older Lambda):
+      severity           — IncidentSeverity: LOW / MEDIUM / HIGH / CRITICAL
+      failure_count:     — recent failure count from Lambda's 5-minute window
+      recovery_strategy  — SmartRecoveryPolicy strategy string
+      escalation_reason  — set when severity >= HIGH
     """
 
-    timestamp:            str             # ISO-8601 UTC, e.g. "2026-04-27T10:00:00+00:00"
+    # ── Phase 5 core fields ───────────────────────────────────────────────────
+    timestamp:            str             # ISO-8601 UTC
     service_name:         str             # which container was acted on
     failure_type:         str             # "crash", "timeout", "slow", etc.
     action:               str             # "restart_service", "enable_fallback", etc.
@@ -39,8 +50,14 @@ class IncidentRecord(BaseModel):
     recovery_duration_ms: float           # wall-clock time for the docker command
     reason:               str             # why this action was triggered (from Lambda)
     stdout:               Optional[str]   # raw docker stdout
-    stderr:               Optional[str]   # raw docker stderr (useful for debugging)
+    stderr:               Optional[str]   # raw docker stderr
     returncode:           Optional[int]   # docker CLI exit code (0 = success)
+
+    # ── Phase 6 enrichment fields ─────────────────────────────────────────────
+    severity:          Optional[str] = None   # LOW / MEDIUM / HIGH / CRITICAL
+    failure_count:     Optional[int] = None   # recent failures in 5-minute window
+    recovery_strategy: Optional[str] = None   # SmartRecoveryPolicy strategy string
+    escalation_reason: Optional[str] = None   # set when is_escalated=True
 
 
 class RecoveryHistoryRepository:

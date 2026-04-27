@@ -97,20 +97,24 @@ class RecoveryService:
         record = IncidentRecord(
             timestamp            = response.timestamp,
             service_name         = request.target_service,
-            failure_type         = request.reason,             # reason carries failure context
+            failure_type         = request.reason,
             action               = request.action.value,
             success              = response.success,
             message              = response.message,
             recovery_duration_ms = round(duration, 2),
             reason               = request.reason,
-            stdout  = response.command_result.stdout     if response.command_result else None,
-            stderr  = response.command_result.stderr     if response.command_result else None,
+            stdout     = response.command_result.stdout     if response.command_result else None,
+            stderr     = response.command_result.stderr     if response.command_result else None,
             returncode = response.command_result.returncode if response.command_result else None,
+            # Phase 6 enrichment — None when request comes from older Lambda
+            severity          = request.severity,
+            failure_count     = request.failure_count,
+            recovery_strategy = request.recovery_strategy,
+            escalation_reason = request.escalation_reason,
         )
         self.history_repository.write_record(record)
 
         # ── Emit CloudWatch metrics AFTER history ──────────────────────────────
-        # Emit success/failure count and duration. Never raises — publisher swallows errors.
         action_str = request.action.value
         if response.success:
             self.cloudwatch_publisher.record_recovery_success(
@@ -127,6 +131,22 @@ class RecoveryService:
             action=action_str,
             duration_ms=round(duration, 2),
         )
+
+        # Phase 6 — severity and escalation metrics
+        if request.severity:
+            self.cloudwatch_publisher.record_incident_severity(
+                target_service=request.target_service,
+                severity=request.severity,
+            )
+            if request.escalation_reason:
+                self.cloudwatch_publisher.record_escalation(
+                    target_service=request.target_service,
+                    severity=request.severity,
+                )
+                logger.warning(
+                    "RecoveryService: ESCALATION severity=%s target=%s reason=%s",
+                    request.severity, request.target_service, request.escalation_reason,
+                )
 
         return response
 

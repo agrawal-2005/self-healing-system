@@ -1,17 +1,19 @@
 """
 CloudWatchMetricsPublisher for recovery-agent.
 
-Emits three metric types under the SelfHealingSystem namespace:
+Phase 5 metrics:
+  RecoverySuccessCount   — docker action success=True
+                           Dims: ServiceName=recovery-agent, TargetService, Action
+  RecoveryFailureCount   — docker action success=False
+                           Dims: ServiceName=recovery-agent, TargetService, Action
+  RecoveryDurationMs     — wall-clock time of docker command (p50/p99 friendly)
+                           Dims: ServiceName=recovery-agent, TargetService, Action
 
-  RecoverySuccessCount   — incremented when a docker action completes with success=True.
-                           Dimensions: ServiceName=recovery-agent, TargetService, Action
-
-  RecoveryFailureCount   — incremented when a docker action completes with success=False.
-                           Dimensions: ServiceName=recovery-agent, TargetService, Action
-
-  RecoveryDurationMs     — duration of the docker command in milliseconds.
-                           Unit: Milliseconds  (allows CloudWatch to compute p50/p99)
-                           Dimensions: ServiceName=recovery-agent, TargetService, Action
+Phase 6 metrics:
+  IncidentSeverityCount  — one per action, tagged with Severity (LOW/MEDIUM/HIGH/CRITICAL)
+                           Dims: ServiceName=recovery-agent, TargetService, Severity
+  EscalationCount        — only when severity >= HIGH (is_escalated=True)
+                           Dims: ServiceName=recovery-agent, TargetService, Severity
 
 Enable with:
   CLOUDWATCH_ENABLED=true
@@ -101,6 +103,40 @@ class CloudWatchMetricsPublisher:
                 {"Name": "ServiceName",  "Value": "recovery-agent"},
                 {"Name": "TargetService", "Value": target_service},
                 {"Name": "Action",        "Value": action},
+            ],
+        )
+
+    # ── Phase 6 metrics ───────────────────────────────────────────────────────
+
+    def record_incident_severity(self, target_service: str, severity: str) -> None:
+        """
+        Emit one count per recovery action, tagged with severity.
+        Allows CloudWatch to track severity distribution over time.
+        """
+        self._put(
+            metric_name="IncidentSeverityCount",
+            value=1.0,
+            unit="Count",
+            dimensions=[
+                {"Name": "ServiceName",  "Value": "recovery-agent"},
+                {"Name": "TargetService", "Value": target_service},
+                {"Name": "Severity",      "Value": severity},
+            ],
+        )
+
+    def record_escalation(self, target_service: str, severity: str) -> None:
+        """
+        Emit one count when an incident is escalated (severity >= HIGH).
+        Useful for alerting on HIGH/CRITICAL escalations.
+        """
+        self._put(
+            metric_name="EscalationCount",
+            value=1.0,
+            unit="Count",
+            dimensions=[
+                {"Name": "ServiceName",  "Value": "recovery-agent"},
+                {"Name": "TargetService", "Value": target_service},
+                {"Name": "Severity",      "Value": severity},
             ],
         )
 

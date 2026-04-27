@@ -29,13 +29,25 @@ class ActionRequest(BaseModel):
     """
     Sent by Lambda to POST /action.
 
-    action         — which recovery action to perform
-    target_service — Docker container name to act on (default: core-service)
-    reason         — human-readable reason (from Lambda, useful in logs)
+    action             — which recovery action to perform
+    target_service     — Docker container name to act on (default: core-service)
+    reason             — human-readable reason (from Lambda, useful in logs)
+
+    Phase 6 optional fields (ignored by older Lambda versions — backwards compatible):
+    severity           — IncidentSeverity value: LOW / MEDIUM / HIGH / CRITICAL
+    recovery_strategy  — SmartRecoveryPolicy strategy string
+    failure_count      — recent failure count (5-minute window) from Lambda tracker
+    escalation_reason  — human-readable escalation message when severity >= HIGH
     """
     action: ActionType
     target_service: str = "core-service"
     reason: str = ""
+
+    # Phase 6 — optional, default None so older Lambda payloads still validate
+    severity:          Optional[str] = None
+    recovery_strategy: Optional[str] = None
+    failure_count:     Optional[int] = None
+    escalation_reason: Optional[str] = None
 
 
 class CommandResult(BaseModel):

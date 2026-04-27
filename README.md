@@ -2,6 +2,15 @@
 
 > A production-grade distributed system that detects service failures, triggers automated recovery through AWS Lambda, and restores full health — without human intervention.
 
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?style=flat-square&logo=fastapi&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&logo=docker&logoColor=white)
+![AWS Lambda](https://img.shields.io/badge/AWS-Lambda-FF9900?style=flat-square&logo=awslambda&logoColor=white)
+![EventBridge](https://img.shields.io/badge/AWS-EventBridge-FF4F8B?style=flat-square&logo=amazonaws&logoColor=white)
+![CloudWatch](https://img.shields.io/badge/AWS-CloudWatch-FF9900?style=flat-square&logo=amazoncloudwatch&logoColor=white)
+![ngrok](https://img.shields.io/badge/ngrok-tunnel-1F1E37?style=flat-square&logo=ngrok&logoColor=white)
+![pydantic](https://img.shields.io/badge/pydantic-settings-E92063?style=flat-square&logo=pydantic&logoColor=white)
+
 ---
 
 ## Table of Contents
@@ -22,60 +31,40 @@
 
 ## Architecture Overview
 
-```
-                         ┌─────────────────────────────────────────────────────┐
-                         │                   LOCAL (Docker Compose)             │
-                         │                                                       │
-  HTTP Request           │  ┌─────────────┐     ┌──────────────┐               │
- ──────────────────────► │  │ api-service  │────►│ core-service │               │
-                         │  │  :8000       │     │   :8001      │               │
-                         │  │             │     └──────────────┘               │
-                         │  │ Circuit     │       (primary work)               │
-                         │  │ Breaker ▼   │                                    │
-                         │  │             │     ┌──────────────┐               │
-                         │  │ (on failure)│────►│fallback-svc  │               │
-                         │  └─────────────┘     │   :8002      │               │
-                         │         │             └──────────────┘               │
-                         │         │              (degraded mode)               │
-                         │  ┌──────▼──────┐                                    │
-                         │  │   monitor   │  health + latency checks (5s poll)  │
-                         │  │  (Python)   │                                     │
-                         │  └──────┬──────┘                                    │
-                         │         │ HTTP 503 detected                          │
-                         └─────────┼─────────────────────────────────────────── ┘
-                                   │
-                         ┌─────────▼──────────────────────────────────────────┐
-                         │                      AWS                            │
-                         │                                                      │
-                         │  ┌──────────────────┐    ┌──────────────────────┐   │
-                         │  │   EventBridge     │───►│  Lambda              │   │
-                         │  │ SelfHealingFailure│    │ RecoveryHandler      │   │
-                         │  │       Rule        │    │                      │   │
-                         │  └──────────────────┘    └──────────┬───────────┘   │
-                         │                                      │ POST /action  │
-                         │  ┌──────────────────┐               │ + token       │
-                         │  │   SQS DLQ        │◄──(on failure)│               │
-                         │  │ LambdaDLQ        │               │               │
-                         │  └──────────────────┘               │               │
-                         │                                      │               │
-                         │  ┌──────────────────┐               │               │
-                         │  │   CloudWatch     │◄─── metrics   │               │
-                         │  │   Dashboard      │    (all svcs) │               │
-                         │  └──────────────────┘               │               │
-                         └─────────────────────────────────────┼───────────────┘
-                                                               │ ngrok tunnel
-                         ┌─────────────────────────────────────┼──────────────┐
-                         │                                      ▼              │
-                         │  ┌──────────────────────────────────────────────┐  │
-                         │  │ recovery-agent  :8003                        │  │
-                         │  │                                               │  │
-                         │  │  1. Validate X-Recovery-Token                │  │
-                         │  │  2. Check allowed-services list              │  │
-                         │  │  3. docker restart core-service              │  │
-                         │  │  4. Write to recovery_history.jsonl          │  │
-                         │  │  5. Emit CloudWatch metrics                  │  │
-                         │  └──────────────────────────────────────────────┘  │
-                         └─────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    client(["🌐 Client"])
+
+    subgraph LOCAL["🖥️ Local — Docker Compose"]
+        api["api-service :8000\nCircuit Breaker"]
+        core["core-service :8001\nprimary processor"]
+        fb["fallback-service :8002\ndegraded mode"]
+        mon["monitor\npoll /health every 5s"]
+    end
+
+    subgraph AWS["☁️ AWS"]
+        eb["EventBridge\nSelfHealingFailureRule"]
+        lam["Lambda\nRecoveryHandler"]
+        dlq["SQS DLQ\nLambdaDLQ"]
+        cw["CloudWatch\nDashboard + Metrics"]
+    end
+
+    subgraph AGENT["🔁 recovery-agent :8003"]
+        ra["1. Validate X-Recovery-Token\n2. Check allowlist\n3. docker restart core-service\n4. Write recovery_history.jsonl\n5. Emit CloudWatch metrics"]
+    end
+
+    client --> api
+    api -->|healthy| core
+    api -->|circuit open| fb
+    core -.->|health poll| mon
+    fb -.->|health poll| mon
+    mon -->|HTTP 503 detected| eb
+    eb --> lam
+    lam -->|POST /action via ngrok| ra
+    lam -.->|on failure| dlq
+    ra --> cw
+    api --> cw
+    mon --> cw
 ```
 
 **End-to-end recovery time: ~5–30 seconds from crash detection to full health.**
@@ -536,12 +525,20 @@ For an SRE or DevOps engineer, this is a working demonstration of **toil reducti
 
 ---
 
-## License
+## Author
 
-MIT
+**Prashant Agrawal**
+
+[![GitHub](https://img.shields.io/badge/GitHub-agrawal--2005-181717?style=flat-square&logo=github&logoColor=white)](https://github.com/agrawal-2005)
 
 ---
 
-<p align="center">
-  Built to demonstrate production-grade self-healing infrastructure patterns.
-</p>
+## License
+
+This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
+
+---
+
+<p align="center">⭐ If you find this project useful, please give it a star! ⭐</p>
+
+<p align="center">Built to demonstrate production-grade self-healing infrastructure patterns.</p>

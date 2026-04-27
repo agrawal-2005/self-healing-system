@@ -15,6 +15,10 @@ Action → Docker command mapping:
 Security: only services in allowed_services may be acted on (checked here).
 History:  every action (success or failure) is appended to the JSONL log.
 Timing:   recovery_duration_ms measures how long the docker command took.
+
+Phase 4 addition:
+  CloudWatch metrics are emitted after each action.
+  The cloudwatch_publisher is a no-op when CLOUDWATCH_ENABLED=false.
 """
 
 import logging
@@ -24,6 +28,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 
 from app.models.schemas import ActionRequest, ActionResponse, ActionType, HealthResponse
+from app.publishers.cloudwatch_publisher import CloudWatchMetricsPublisher
 from app.services.docker_executor import DockerExecutor
 from app.services.recovery_history import IncidentRecord, RecoveryHistoryRepository
 
@@ -37,11 +42,13 @@ class RecoveryService:
         service_name: str,
         allowed_services: list[str],
         history_repository: RecoveryHistoryRepository,
+        cloudwatch_publisher: CloudWatchMetricsPublisher,
     ) -> None:
-        self.docker_executor    = docker_executor
-        self.service_name       = service_name
-        self.allowed_services   = allowed_services
-        self.history_repository = history_repository
+        self.docker_executor      = docker_executor
+        self.service_name         = service_name
+        self.allowed_services     = allowed_services
+        self.history_repository   = history_repository
+        self.cloudwatch_publisher = cloudwatch_publisher
 
     def health(self) -> HealthResponse:
         return HealthResponse(status="healthy", service=self.service_name)
@@ -49,13 +56,14 @@ class RecoveryService:
     def execute_action(self, request: ActionRequest) -> ActionResponse:
         """
         Route the incoming action to the correct private handler,
-        measure how long it takes, then write a record to history.
+        measure how long it takes, write a record to history, emit CloudWatch metrics.
 
         Order matters:
           1. Validate the target service against the allowlist.
           2. Execute the docker command (handler returns ActionResponse).
           3. THEN write history — response must exist before we record it.
-          4. Return the response.
+          4. THEN emit CloudWatch metrics — after history, never block on metrics.
+          5. Return the response.
         """
         logger.info(
             "RecoveryService: action=%s  target=%s  reason=%r",
@@ -100,6 +108,25 @@ class RecoveryService:
             returncode = response.command_result.returncode if response.command_result else None,
         )
         self.history_repository.write_record(record)
+
+        # ── Emit CloudWatch metrics AFTER history ──────────────────────────────
+        # Emit success/failure count and duration. Never raises — publisher swallows errors.
+        action_str = request.action.value
+        if response.success:
+            self.cloudwatch_publisher.record_recovery_success(
+                target_service=request.target_service,
+                action=action_str,
+            )
+        else:
+            self.cloudwatch_publisher.record_recovery_failure(
+                target_service=request.target_service,
+                action=action_str,
+            )
+        self.cloudwatch_publisher.record_recovery_duration(
+            target_service=request.target_service,
+            action=action_str,
+            duration_ms=round(duration, 2),
+        )
 
         return response
 

@@ -9,6 +9,8 @@ venv/
 # Environment / secrets — never commit these
 .env
 .env.*
+# But do commit the example template (no real secrets inside)
+!.env.example
 
 # Docker
 *.log

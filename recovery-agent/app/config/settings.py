@@ -19,7 +19,19 @@ class Settings(BaseSettings):
     allowed_services: str = "core-service"
     recovery_history_path: str = "/app/data/recovery_history.jsonl"
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    # ── CloudWatch metrics ────────────────────────────────────────────────────
+    # Set CLOUDWATCH_ENABLED=true (+ AWS credentials in env) to publish metrics.
+    cloudwatch_enabled: bool   = False
+    cloudwatch_namespace: str  = "SelfHealingSystem"
+    aws_region: str            = "us-east-1"
+
+    # extra="ignore" so that AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY loaded
+    # from env_file don't cause a validation error (boto3 reads them directly).
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
 
 settings = Settings()

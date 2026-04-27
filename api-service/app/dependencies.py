@@ -7,12 +7,13 @@ that route handlers need. By centralising construction here:
   - Swapping Settings or clients (e.g. for testing) means changing one place.
   - Route handlers stay unaware of how objects are created.
 
-The three singletons are created once at import time.
+The singletons are created once at import time.
 """
 
 from app.clients.core_client import CoreClient
 from app.clients.fallback_client import FallbackClient
 from app.config.settings import settings
+from app.publishers.cloudwatch_publisher import CloudWatchMetricsPublisher
 from app.services.api_service import ApiService
 from app.services.circuit_breaker import CircuitBreaker
 
@@ -35,11 +36,18 @@ circuit_breaker = CircuitBreaker(
     half_open_max_calls=settings.circuit_half_open_max_calls,
 )
 
+_cloudwatch_publisher = CloudWatchMetricsPublisher(
+    region    = settings.aws_region,
+    namespace = settings.cloudwatch_namespace,
+    enabled   = settings.cloudwatch_enabled,
+)
+
 _api_service = ApiService(
-    core_client=_core_client,
-    fallback_client=_fallback_client,
-    service_name=settings.service_name,
-    circuit_breaker=circuit_breaker,
+    core_client          = _core_client,
+    fallback_client      = _fallback_client,
+    service_name         = settings.service_name,
+    circuit_breaker      = circuit_breaker,
+    cloudwatch_publisher = _cloudwatch_publisher,
 )
 
 

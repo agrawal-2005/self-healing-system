@@ -58,8 +58,9 @@ def build_monitor() -> MonitorService:
     )
 
     cloudwatch_publisher = CloudWatchMetricsPublisher(
-        region  = settings.aws_region,
-        enabled = settings.cloudwatch_enabled,
+        region    = settings.aws_region,
+        enabled   = settings.cloudwatch_enabled,
+        namespace = settings.cloudwatch_namespace,
     )
 
     return MonitorService(

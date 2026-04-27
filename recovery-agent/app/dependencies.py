@@ -3,6 +3,7 @@ Dependency injection wiring for recovery-agent.
 """
 
 from app.config.settings import settings
+from app.publishers.cloudwatch_publisher import CloudWatchMetricsPublisher
 from app.services.docker_executor import DockerExecutor
 from app.services.recovery_history import RecoveryHistoryRepository
 from app.services.recovery_service import RecoveryService
@@ -13,15 +14,22 @@ _history_repository = RecoveryHistoryRepository(
     file_path=settings.recovery_history_path
 )
 
+_cloudwatch_publisher = CloudWatchMetricsPublisher(
+    region    = settings.aws_region,
+    namespace = settings.cloudwatch_namespace,
+    enabled   = settings.cloudwatch_enabled,
+)
+
 _recovery_service = RecoveryService(
-    docker_executor=_docker_executor,
-    service_name=settings.service_name,
-    allowed_services=[
+    docker_executor      = _docker_executor,
+    service_name         = settings.service_name,
+    allowed_services     = [
         item.strip()
         for item in settings.allowed_services.split(",")
         if item.strip()
     ],
-    history_repository=_history_repository,
+    history_repository   = _history_repository,
+    cloudwatch_publisher = _cloudwatch_publisher,
 )
 
 

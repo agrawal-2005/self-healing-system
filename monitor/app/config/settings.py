@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     eventbridge_source: str        = "selfhealing.local"
     eventbridge_detail_type: str   = "ServiceFailureDetected"
 
+    # ── CloudWatch ────────────────────────────────────────────────────────────
+    # Metrics namespace (default matches other services)
+    cloudwatch_namespace: str  = "SelfHealingSystem"
+
     # ── Feature flags ─────────────────────────────────────────────────────────
     # Set EVENTBRIDGE_ENABLED=false to run monitor without AWS credentials.
     eventbridge_enabled: bool  = True

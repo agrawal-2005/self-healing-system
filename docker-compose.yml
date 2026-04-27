@@ -57,6 +57,10 @@ services:
     container_name: api-service
     ports:
       - "8000:8000"
+    # Load AWS credentials from monitor/.env so boto3 can publish CloudWatch metrics.
+    # The environment block below takes precedence over any conflicting values in the file.
+    env_file:
+      - monitor/.env
     environment:
       SERVICE_NAME: "api-service"
       CORE_SERVICE_URL: "http://core-service:8001"
@@ -65,6 +69,9 @@ services:
       CIRCUIT_FAILURE_THRESHOLD: "3"
       CIRCUIT_RECOVERY_TIMEOUT_SECONDS: "30"
       CIRCUIT_HALF_OPEN_MAX_CALLS: "1"
+      CLOUDWATCH_ENABLED: "true"
+      CLOUDWATCH_NAMESPACE: "SelfHealingSystem"
+      AWS_DEFAULT_REGION: "us-east-1"
     networks:
       - healing-net
     depends_on:
@@ -92,12 +99,18 @@ services:
     container_name: recovery-agent
     ports:
       - "8003:8003"
+    # Load AWS credentials from monitor/.env so boto3 can publish CloudWatch metrics.
+    env_file:
+      - monitor/.env
     environment:
       SERVICE_NAME: "recovery-agent"
       DOCKER_COMMAND_TIMEOUT: "30"
       RECOVERY_TOKEN: "dev-token"
       ALLOWED_SERVICES: "core-service"
       RECOVERY_HISTORY_PATH: "/app/data/recovery_history.jsonl"
+      CLOUDWATCH_ENABLED: "true"
+      CLOUDWATCH_NAMESPACE: "SelfHealingSystem"
+      AWS_DEFAULT_REGION: "us-east-1"
     volumes:
       # Mount the host Docker socket — required for docker CLI to work inside container
       - /var/run/docker.sock:/var/run/docker.sock

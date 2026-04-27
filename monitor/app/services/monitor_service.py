@@ -160,7 +160,9 @@ class MonitorService:
             published = self.eventbridge_publisher.publish(event)
 
             if published:
-                self.cloudwatch_publisher.record_failure(result.service_name)
+                self.cloudwatch_publisher.record_failure_detected(
+                    result.service_name, failure_type
+                )
         else:
             # Service is healthy — clear cooldown so next failure creates a fresh event
             self._cooldown.clear(result.service_name)

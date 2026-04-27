@@ -1,0 +1,254 @@
+{
+  "widgets": [
+    {
+      "type": "text",
+      "x": 0,
+      "y": 0,
+      "width": 24,
+      "height": 3,
+      "properties": {
+        "markdown": "# Self-Healing System — Observability Dashboard\n\n**Pipeline:** `core-service crash` → `api-service fallback` → `monitor detects 503` → `EventBridge event` → `Lambda restart` → `recovery-agent docker restart` → `core-service healthy`\n\n**Namespace:** `SelfHealingSystem` | **Region:** `us-east-1` | **DLQ:** `SelfHealingLambdaDLQ`"
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 3,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Failure Detected (monitor → EventBridge)",
+        "metrics": [
+          [
+            "SelfHealingSystem",
+            "FailureDetectedCount",
+            "ServiceName",
+            "core-service",
+            "FailureType",
+            "crash",
+            { "stat": "Sum", "period": 60, "color": "#d62728", "label": "crash" }
+          ],
+          [
+            "SelfHealingSystem",
+            "FailureDetectedCount",
+            "ServiceName",
+            "core-service",
+            "FailureType",
+            "timeout",
+            { "stat": "Sum", "period": 60, "color": "#ff7f0e", "label": "timeout" }
+          ]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-east-1",
+        "period": 60,
+        "yAxis": { "left": { "min": 0 } },
+        "legend": { "position": "bottom" }
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12,
+      "y": 3,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Recovery Outcomes (recovery-agent)",
+        "metrics": [
+          [
+            "SelfHealingSystem",
+            "RecoverySuccessCount",
+            "ServiceName",
+            "recovery-agent",
+            "TargetService",
+            "core-service",
+            "Action",
+            "restart_service",
+            { "stat": "Sum", "period": 60, "color": "#2ca02c", "label": "success" }
+          ],
+          [
+            "SelfHealingSystem",
+            "RecoveryFailureCount",
+            "ServiceName",
+            "recovery-agent",
+            "TargetService",
+            "core-service",
+            "Action",
+            "restart_service",
+            { "stat": "Sum", "period": 60, "color": "#d62728", "label": "failure" }
+          ]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-east-1",
+        "period": 60,
+        "yAxis": { "left": { "min": 0 } },
+        "legend": { "position": "bottom" }
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 9,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "title": "Average Recovery Duration (ms)",
+        "metrics": [
+          [
+            "SelfHealingSystem",
+            "RecoveryDurationMs",
+            "ServiceName",
+            "recovery-agent",
+            "TargetService",
+            "core-service",
+            "Action",
+            "restart_service",
+            { "stat": "Average", "period": 60, "color": "#9467bd", "label": "avg ms" }
+          ],
+          [
+            "SelfHealingSystem",
+            "RecoveryDurationMs",
+            "ServiceName",
+            "recovery-agent",
+            "TargetService",
+            "core-service",
+            "Action",
+            "restart_service",
+            { "stat": "p99", "period": 60, "color": "#e377c2", "label": "p99 ms" }
+          ]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-east-1",
+        "period": 60,
+        "yAxis": { "left": { "min": 0, "label": "milliseconds" } },
+        "legend": { "position": "bottom" }
+      }
+    },
+    {
+      "type": "metric",
+      "x": 8,
+      "y": 9,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "title": "Fallback Used (api-service)",
+        "metrics": [
+          [
+            "SelfHealingSystem",
+            "FallbackUsedCount",
+            "ServiceName",
+            "api-service",
+            "TargetService",
+            "core-service",
+            { "stat": "Sum", "period": 60, "color": "#ff7f0e", "label": "fallback calls" }
+          ]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-east-1",
+        "period": 60,
+        "yAxis": { "left": { "min": 0 } },
+        "legend": { "position": "bottom" }
+      }
+    },
+    {
+      "type": "metric",
+      "x": 16,
+      "y": 9,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "title": "Circuit Breaker Opened (api-service)",
+        "metrics": [
+          [
+            "SelfHealingSystem",
+            "CircuitBreakerOpenCount",
+            "ServiceName",
+            "api-service",
+            "TargetService",
+            "core-service",
+            { "stat": "Sum", "period": 60, "color": "#d62728", "label": "opened" }
+          ]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-east-1",
+        "period": 60,
+        "yAxis": { "left": { "min": 0 } },
+        "legend": { "position": "bottom" }
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 15,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Circuit Breaker State (0=CLOSED  1=HALF_OPEN  2=OPEN)",
+        "metrics": [
+          [
+            "SelfHealingSystem",
+            "CircuitBreakerState",
+            "ServiceName",
+            "api-service",
+            "TargetService",
+            "core-service",
+            { "stat": "Maximum", "period": 60, "color": "#1f77b4", "label": "state" }
+          ]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-east-1",
+        "period": 60,
+        "yAxis": {
+          "left": {
+            "min": 0,
+            "max": 2,
+            "label": "0=CLOSED  1=HALF_OPEN  2=OPEN"
+          }
+        },
+        "annotations": {
+          "horizontal": [
+            { "label": "OPEN", "value": 2, "color": "#d62728" },
+            { "label": "HALF_OPEN", "value": 1, "color": "#ff7f0e" },
+            { "label": "CLOSED", "value": 0, "color": "#2ca02c" }
+          ]
+        },
+        "legend": { "position": "bottom" }
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12,
+      "y": 15,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Lambda DLQ — Dead-Letter Messages (SQS)",
+        "metrics": [
+          [
+            "AWS/SQS",
+            "ApproximateNumberOfMessagesVisible",
+            "QueueName",
+            "SelfHealingLambdaDLQ",
+            { "stat": "Maximum", "period": 60, "color": "#d62728", "label": "DLQ messages" }
+          ]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-east-1",
+        "period": 60,
+        "yAxis": { "left": { "min": 0, "label": "message count" } },
+        "annotations": {
+          "horizontal": [
+            { "label": "Alert threshold", "value": 1, "color": "#ff7f0e" }
+          ]
+        },
+        "legend": { "position": "bottom" }
+      }
+    }
+  ]
+}

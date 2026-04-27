@@ -33,49 +33,47 @@
 
 ## Architecture Overview
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           AWS EC2 — Docker Compose                          │
-│                                                                             │
-│   ┌──────────────┐     ┌──────────────┐     ┌──────────────────────────┐   │
-│   │  api-service  │────▶│ core-service │     │    recovery-agent        │   │
-│   │    :8000      │     │    :8001     │     │        :8003             │   │
-│   │ Circuit Breaker│    │  (primary)   │     │  1. Validates token      │   │
-│   └──────┬───────┘     └──────────────┘     │  2. docker restart/stop  │   │
-│          │                                   │  3. Writes audit log     │   │
-│          │ fallback                          │  4. Emits CW metrics     │   │
-│          ▼                                   └─────────────▲────────────┘   │
-│   ┌──────────────┐     ┌──────────────┐                   │                │
-│   │fallback-svc  │     │   monitor    │                   │ HTTP POST      │
-│   │    :8002     │     │ polls /health│                   │ /action        │
-│   │  (degraded)  │     │   every 5s  │                   │                │
-│   └──────────────┘     └──────┬───────┘                   │                │
-└──────────────────────────────┼────────────────────────────┼────────────────┘
-                                │                            │
-                    HTTP 503    │                            │
-                    detected    ▼                            │
-                        ┌──────────────┐                    │
-                        │  EventBridge │                    │
-                        │ FailureRule  │                    │
-                        └──────┬───────┘                    │
-                               │                            │
-                               ▼                            │
-                        ┌──────────────┐    POST /action    │
-                        │    Lambda    │────────────────────┘
-                        │ RecoveryHndlr│
-                        │              │  SmartRecoveryPolicy
-                        │ LOW   → restart   IncidentSeverity
-                        │ MEDIUM→ restart   Escalation
-                        │ HIGH  → restart   RollbackManager
-                        │ CRITICAL→ fallback│
-                        └──────┬───────┘
-                               │
-              ┌────────────────┼─────────────────┐
-              ▼                ▼                  ▼
-       ┌────────────┐  ┌──────────────┐  ┌───────────────┐
-       │  SQS DLQ   │  │  CloudWatch  │  │  CloudWatch   │
-       │ (failures) │  │   Metrics    │  │  Dashboard    │
-       └────────────┘  └──────────────┘  └───────────────┘
+```mermaid
+flowchart TD
+    client(["🌐 Client"])
+
+    subgraph EC2["🖥️ AWS EC2 — Docker Compose"]
+        api["api-service :8000\nCircuit Breaker"]
+        core["core-service :8001\nprimary processor"]
+        fb["fallback-service :8002\ndegraded mode"]
+        mon["monitor\npoll /health every 5s"]
+
+        subgraph AGENT["🔁 recovery-agent :8003"]
+            ra["1. Validate X-Recovery-Token\n2. docker restart / stop\n3. Write recovery_history.jsonl\n4. Emit CloudWatch metrics"]
+        end
+    end
+
+    subgraph AWS["☁️ AWS Cloud"]
+        eb["EventBridge\nSelfHealingFailureRule"]
+
+        subgraph LAM["⚡ Lambda — RecoveryHandler"]
+            policy["SmartRecoveryPolicy\nLOW / MEDIUM → restart\nHIGH → restart + escalation\nCRITICAL → enable_fallback"]
+            rollback["RollbackManager\ndry-run rollback\nrecommendation"]
+        end
+
+        dlq["SQS DLQ\nfailed Lambda events"]
+        cw["CloudWatch\nMetrics + Dashboard\n11 widgets"]
+    end
+
+    client -->|GET /process| api
+    api -->|circuit CLOSED| core
+    api -->|circuit OPEN| fb
+    core -.->|health poll| mon
+    fb -.->|health poll| mon
+    api -->|FallbackUsed\nCircuitBreaker metrics| cw
+    mon -->|HTTP 503 detected| eb
+    mon -->|FailureDetected metric| cw
+    eb -->|invoke| LAM
+    policy --> rollback
+    LAM -->|POST /action\nX-Recovery-Token| ra
+    LAM -.->|on hard failure| dlq
+    LAM -->|IncidentSeverityCount\nEscalationCount\nRollbackRecommendedCount| cw
+    ra -->|RecoverySuccess\nRecoveryDuration| cw
 ```
 
 **End-to-end recovery time: ~5–30 seconds from crash detection to full health.**

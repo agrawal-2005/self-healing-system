@@ -133,11 +133,6 @@ class RecoveryService:
     # ── action handlers ───────────────────────────────────────────────────────
 
     def _restart_service(self, request: ActionRequest) -> ActionResponse:
-        logger.info(
-            "RECOVERY_DELAY_ACTIVE: holding %ds before restarting '%s'",
-            15, request.target_service,
-        )
-        time.sleep(15)
         cmd_result = self.docker_executor.restart(request.target_service)
         return ActionResponse(
             success=cmd_result.success,

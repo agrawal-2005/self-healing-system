@@ -65,7 +65,7 @@ services:
       SERVICE_NAME: "api-service"
       CORE_SERVICE_URL: "http://core-service:8001"
       FALLBACK_SERVICE_URL: "http://fallback-service:8002"
-      REQUEST_TIMEOUT: "3.0"
+      REQUEST_TIMEOUT: "2.0"
       CIRCUIT_FAILURE_THRESHOLD: "3"
       CIRCUIT_RECOVERY_TIMEOUT_SECONDS: "30"
       CIRCUIT_HALF_OPEN_MAX_CALLS: "1"

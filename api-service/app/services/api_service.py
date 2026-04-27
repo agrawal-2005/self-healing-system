@@ -90,6 +90,7 @@ class ApiService:
         if not can_call:
             # Circuit is OPEN (or HALF_OPEN probe limit reached) — skip core-service
             logger.warning("Circuit OPEN — skipping core-service, using fallback directly.")
+            logger.warning("FALLBACK_TRIGGERED: circuit OPEN, routing to fallback-service")
             fallback = await self.fallback_client.get_fallback()
             self.cloudwatch_publisher.record_fallback_used(_CORE_TARGET)
             return ProcessResponse(
@@ -128,6 +129,7 @@ class ApiService:
         # ── Step 3: try fallback-service ──────────────────────────────────────
         # If this raises, the exception propagates up to the route handler,
         # which converts it to an HTTP 503 response.
+        logger.warning("FALLBACK_TRIGGERED: core-service failed, routing to fallback-service")
         fallback = await self.fallback_client.get_fallback()
         self.cloudwatch_publisher.record_fallback_used(_CORE_TARGET)
         logger.info("process(): fallback-service OK — source=fallback-service")

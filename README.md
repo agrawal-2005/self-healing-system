@@ -13,14 +13,42 @@
 
 ---
 
+## Live Demo
+
+> Deployed on AWS EC2 — `54.198.165.2`
+
+| Service | URL | Status |
+|---|---|---|
+| **api-service** | `http://54.198.165.2:8000/process` | Primary entry point |
+| **api-service health** | `http://54.198.165.2:8000/health` | Health check |
+| **core-service health** | `http://54.198.165.2:8001/health` | Primary service |
+| **fallback-service health** | `http://54.198.165.2:8002/health` | Fallback service |
+
+```bash
+# Try it live — normal response
+curl http://54.198.165.2:8000/process
+
+# Trigger a crash and watch the system self-heal
+curl -X POST http://54.198.165.2:8001/fail
+curl http://54.198.165.2:8000/process    # degraded=true (fallback active)
+sleep 30
+curl http://54.198.165.2:8000/process    # degraded=false (auto-recovered)
+```
+
+> **Note:** The EC2 instance may be stopped to avoid AWS costs. If the above URLs are unreachable, refer to the [Setup Instructions](#setup-instructions) to run locally.
+
+---
+
 ## Table of Contents
 
+- [Live Demo](#live-demo)
 - [Architecture Overview](#architecture-overview)
 - [Phase Progression](#phase-progression)
 - [Features](#features)
 - [Tech Stack](#tech-stack)
 - [System Workflow](#system-workflow)
 - [Key Concepts](#key-concepts)
+- [API Reference](#api-reference)
 - [Project Structure](#project-structure)
 - [Setup Instructions](#setup-instructions)
 - [Testing the System](#testing-the-system)
@@ -260,6 +288,74 @@ ROLLBACK_RECOMMENDED: service=core-service  image=core-service:latest  (Phase 6 
 ```
 
 This is Phase 6 dry-run — the recommendation is logged but not executed. Phase 7 would implement the actual `docker pull` + container replacement. The CloudWatch `RollbackRecommendedCount` metric makes this visible in the dashboard.
+
+---
+
+## API Reference
+
+### api-service — Port 8000 (Public Gateway)
+
+| Method | Endpoint | Description | Response |
+|---|---|---|---|
+| `GET` | `/health` | Service health check | `{"status": "healthy", "service": "api-service"}` |
+| `GET` | `/process` | Main entry point — calls core-service, falls back to fallback-service on failure | `{"source": "core-service", "degraded": false}` |
+
+### core-service — Port 8001 (Primary Worker)
+
+| Method | Endpoint | Description | Response |
+|---|---|---|---|
+| `GET` | `/health` | Returns 503 when crashed | `{"status": "healthy"/"unhealthy", "service": "core-service"}` |
+| `GET` | `/work` | Business logic endpoint called by api-service | `{"message": "...", "service": "core-service"}` |
+| `GET` | `/slow` | Simulates high latency response | `{"message": "...", "latency_simulated_seconds": 5.0}` |
+| `POST` | `/fail` | **Test only** — triggers a crash | `{"crashed": true}` |
+| `POST` | `/slow-mode` | **Test only** — activates slow mode on `/work` | `{"message": "slow mode enabled"}` |
+| `POST` | `/recover` | Manually resets all failure flags | `{"crashed": false}` |
+
+### fallback-service — Port 8002 (Degraded Mode)
+
+| Method | Endpoint | Description | Response |
+|---|---|---|---|
+| `GET` | `/health` | Service health check | `{"status": "healthy", "service": "fallback-service"}` |
+| `GET` | `/fallback` | Returns degraded response (called by api-service when circuit is OPEN) | `{"message": "...", "degraded": true}` |
+
+### recovery-agent — Port 8003 (Recovery Executor)
+
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| `GET` | `/health` | None | Health check (token-free for load balancers) |
+| `POST` | `/action` | `X-Recovery-Token` header required | Executes Docker recovery command |
+
+**POST `/action` request body:**
+
+```json
+{
+  "action": "restart_service | enable_fallback | disable_fallback",
+  "target_service": "core-service",
+  "reason": "crash detected",
+  "severity": "LOW | MEDIUM | HIGH | CRITICAL",
+  "recovery_strategy": "standard_restart | fallback_on_critical",
+  "failure_count": 1,
+  "escalation_reason": null
+}
+```
+
+**POST `/action` response:**
+
+```json
+{
+  "success": true,
+  "action": "restart_service",
+  "target_service": "core-service",
+  "message": "Container 'core-service' restarted successfully.",
+  "timestamp": "2026-04-27T19:10:06.361801+00:00",
+  "command_result": {
+    "success": true,
+    "stdout": "core-service",
+    "stderr": "",
+    "returncode": 0
+  }
+}
+```
 
 ---
 

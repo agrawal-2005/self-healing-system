@@ -644,6 +644,22 @@ done
 Dashboard name: `SelfHealingSystemDashboard`
 Namespace: `SelfHealingSystem`
 
+### Live Dashboard Screenshots
+
+**Failure Detection & Recovery Outcomes**
+![Dashboard Overview](docs/screenshots/dashboard-overview.png)
+> Real-time view of crash detection (red) and automated recovery (green) across a 3-hour test window. Every failure spike on the left has a matching success spike on the right — the system self-healed every single time.
+
+**Recovery Pipeline Metrics**
+![Recovery Pipeline](docs/screenshots/recovery-pipeline.png)
+> Recovery duration peaked at 17.3s during load testing, fallback activated up to 8 times, and the circuit breaker stayed OPEN while the service was unstable. Lambda DLQ shows no data — Lambda never hard-failed across the entire test.
+
+**Incident Intelligence — Phase 6**
+![Incident Intelligence](docs/screenshots/incident-intelligence.png)
+> SmartRecoveryPolicy in action: CRITICAL escalations firing above the alert threshold, and rollback recommendations triggered above the rollback threshold. All 3 widgets confirm the severity escalation ladder (LOW → MEDIUM → HIGH → CRITICAL) worked as designed.
+
+---
+
 ### All 11 Widgets Explained
 
 #### Phase 5 Widgets

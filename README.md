@@ -71,33 +71,33 @@ curl -X POST http://54.198.165.2:8020/fail
 
 ```mermaid
 flowchart TD
-    client(["🌐 Client"])
+    client(["Client"])
 
-    subgraph EC2["🖥️ AWS EC2 — Docker Compose"]
+    subgraph EC2["AWS EC2 — Docker Compose"]
         api["api-service :8000\nCircuit Breaker"]
         core["core-service :8001\nstrategy: restart"]
         fb["fallback-service :8002\nshared fallback"]
-        pay["payment-service :8010\nstrategy: escalate (critical)"]
+        pay["payment-service :8010\nstrategy: escalate"]
         mov["movie-service :8020\nstrategy: fallback"]
-        mon["monitor\npoll /health every 5s\nreads services_config.json"]
+        mon["monitor\npoll /health every 5s"]
         cfg[["services_config.json\nservice registry"]]
 
-        subgraph AGENT["🔁 recovery-agent :8003"]
-            ra["1. Validate X-Recovery-Token\n2. docker restart / stop\n3. Write recovery_history.jsonl\n4. Emit CloudWatch metrics"]
+        subgraph AGENT["recovery-agent :8003"]
+            ra["validate token\ndocker restart / stop\nwrite history\nemit metrics"]
         end
     end
 
-    subgraph AWS["☁️ AWS Cloud"]
+    subgraph AWS["AWS Cloud"]
         eb["EventBridge\nSelfHealingFailureRule"]
 
-        subgraph LAM["⚡ Lambda — RecoveryHandler"]
-            reg["Service Registry\nloads services_config.json"]
-            policy["SmartRecoveryPolicy\nLOW / MEDIUM → restart\nHIGH → restart + escalation\nCRITICAL → enable_fallback"]
-            strat["Strategy Override\nrestart / escalate / fallback"]
-            rollback["RollbackManager\ndry-run rollback\nrecommendation"]
+        subgraph LAM["Lambda — RecoveryHandler"]
+            reg["Service Registry"]
+            policy["SmartRecoveryPolicy\nLOW / MEDIUM / HIGH / CRITICAL"]
+            strat["Strategy Override"]
+            rollback["RollbackManager"]
         end
 
-        dlq["SQS DLQ\nfailed Lambda events"]
+        dlq["SQS DLQ"]
         cw["CloudWatch\nMetrics + Dashboard\n20 widgets"]
     end
 
@@ -110,17 +110,17 @@ flowchart TD
     fb -.->|health poll| mon
     pay -.->|health poll| mon
     mov -.->|health poll| mon
-    api -->|FallbackUsed\nCircuitBreaker metrics| cw
-    mon -->|ServiceFailureDetected event\n(service_name in detail)| eb
+    api -->|FallbackUsed + CircuitBreaker| cw
+    mon -->|ServiceFailureDetected| eb
     mon -->|FailureDetectedCount| cw
     eb -->|invoke| LAM
     reg --> strat
     policy --> strat
     strat --> rollback
-    LAM -->|POST /action\nX-Recovery-Token| ra
+    LAM -->|POST /action + token| ra
     LAM -.->|on hard failure| dlq
-    LAM -->|IncidentSeverityCount\nEscalationCount\nRollbackRecommendedCount| cw
-    ra -->|RecoverySuccess\nRecoveryDuration| cw
+    LAM -->|severity + escalation metrics| cw
+    ra -->|RecoverySuccess + Duration| cw
 ```
 
 **End-to-end recovery time: ~5–30 seconds from crash detection to full health.**
@@ -816,6 +816,10 @@ Namespace: `SelfHealingSystem`
 **Incident Intelligence — Phase 6**
 ![Incident Intelligence](docs/screenshots/incident-intelligence.png)
 > SmartRecoveryPolicy in action: CRITICAL escalations firing above the alert threshold, and rollback recommendations triggered above the rollback threshold. All 3 widgets confirm the severity escalation ladder (LOW → MEDIUM → HIGH → CRITICAL) worked as designed.
+
+**Service Recovery Strategies**
+![Service Recovery Strategies](docs/screenshots/multi-service-recovery-overview.png)
+> Recovery duration breakdown per service alongside the strategy reference table. Each service carries a distinct recovery strategy: core-service restarts automatically (peaking at 1.7s), payment-service always escalates to minimum HIGH severity with no fallback, and movie-service routes to fallback-service on CRITICAL. The chart confirms only core-service has active recovery events — payment-service and movie-service lines appear when those services are exercised.
 
 ---
 

@@ -107,7 +107,7 @@ services:
       DOCKER_COMMAND_TIMEOUT: "30"
       RECOVERY_TOKEN: "dev-token"
       # Phase 7: all registered services are allowed
-      ALLOWED_SERVICES: "core-service,payment-service,movie-service,movie-fallback-service"
+      ALLOWED_SERVICES: "core-service,payment-service,movie-service,fallback-service"
       RECOVERY_HISTORY_PATH: "/app/data/recovery_history.jsonl"
       CLOUDWATCH_ENABLED: "true"
       CLOUDWATCH_NAMESPACE: "SelfHealingSystem"
@@ -175,24 +175,3 @@ services:
       retries: 3
       start_period: 8s
 
-  # ── movie-fallback-service ────────────────────────────────────────────────────
-  # Phase 7: Cached movie catalog. Used when movie-service is CRITICAL/stopped.
-  movie-fallback-service:
-    build:
-      context: ./movie-fallback-service
-      dockerfile: Dockerfile
-    container_name: movie-fallback-service
-    ports:
-      - "8021:8021"
-    environment:
-      SERVICE_NAME: "movie-fallback-service"
-    networks:
-      - healing-net
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c",
-             "import urllib.request; urllib.request.urlopen('http://localhost:8021/health')"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-      start_period: 8s

@@ -25,9 +25,9 @@
       "health_url": "http://movie-service:8020/health",
       "container_name": "movie-service",
       "strategy": "fallback",
-      "fallback_service": "movie-fallback-service",
+      "fallback_service": "fallback-service",
       "critical": false,
-      "description": "Movie catalog service — falls back to cached responses on failure"
+      "description": "Movie catalog service — falls back to existing fallback-service on failure"
     }
   ]
 }

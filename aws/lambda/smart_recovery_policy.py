@@ -59,6 +59,7 @@ class RecoveryDecision:
     recovery_strategy:   str
     failure_count_5min:  int
     failure_count_10min: int
+    service_name:        str  = ""
     escalation_reason:   str  = ""
     is_escalated:        bool = False
 
@@ -67,6 +68,17 @@ class RecoveryDecision:
 
 # Maps service_name → list of monotonic timestamps (one per failure event)
 _failure_history: dict[str, list[float]] = {}
+
+
+def _clear_history(service_name: str) -> None:
+    """
+    Wipe the failure history for service_name.
+    Called after a successful enable_fallback so that future failures on the
+    same service start the severity ladder from scratch (LOW), preventing the
+    loop where a post-recovery startup blip immediately re-triggers CRITICAL.
+    """
+    _failure_history.pop(service_name, None)
+    logger.info("SmartRecoveryPolicy: cleared failure history for %s", service_name)
 
 
 def _record_and_count(service_name: str) -> tuple[int, int]:
@@ -175,6 +187,7 @@ class SmartRecoveryPolicy:
             recovery_strategy   = recovery_strategy,
             failure_count_5min  = count_5,
             failure_count_10min = count_10,
+            service_name        = service_name,
             escalation_reason   = escalation_reason,
             is_escalated        = is_escalated,
         )
@@ -189,7 +202,16 @@ class SmartRecoveryPolicy:
         If recovery FAILED, upgrades severity to CRITICAL regardless of current level.
         Returns a (possibly new) RecoveryDecision with updated fields.
         """
-        if recovery_success or decision.severity == IncidentSeverity.CRITICAL:
+        if recovery_success:
+            # After a successful enable_fallback, wipe the failure history for this
+            # service so it starts back at LOW severity when it comes back up.
+            # Without this clear, a brief DOWN during container startup immediately
+            # re-triggers CRITICAL → enable_fallback → infinite restart loop.
+            if decision.action == "enable_fallback" and decision.service_name:
+                _clear_history(decision.service_name)
+            return decision
+
+        if decision.severity == IncidentSeverity.CRITICAL:
             return decision  # nothing to upgrade
 
         escalation_reason = (

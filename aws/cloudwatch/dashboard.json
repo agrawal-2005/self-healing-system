@@ -7,7 +7,7 @@
       "width": 24,
       "height": 3,
       "properties": {
-        "markdown": "# Self-Healing System — Observability Dashboard\n\n**Pipeline:** `core-service crash` → `api-service fallback` → `monitor detects 503` → `EventBridge event` → `Lambda restart` → `recovery-agent docker restart` → `core-service healthy`\n\n**Namespace:** `SelfHealingSystem` | **Region:** `us-east-1` | **DLQ:** `SelfHealingLambdaDLQ`"
+        "markdown": "# Self-Healing System \u2014 Observability Dashboard\n\n**Pipeline:** `core-service crash` \u2192 `api-service fallback` \u2192 `monitor detects 503` \u2192 `EventBridge event` \u2192 `Lambda restart` \u2192 `recovery-agent docker restart` \u2192 `core-service healthy`\n\n**Namespace:** `SelfHealingSystem` | **Region:** `us-east-1` | **DLQ:** `SelfHealingLambdaDLQ`"
       }
     },
     {
@@ -17,7 +17,7 @@
       "width": 12,
       "height": 6,
       "properties": {
-        "title": "Failure Detected (monitor → EventBridge)",
+        "title": "Failure Detected (monitor \u2192 EventBridge)",
         "metrics": [
           [
             "SelfHealingSystem",
@@ -26,7 +26,12 @@
             "core-service",
             "FailureType",
             "crash",
-            { "stat": "Sum", "period": 60, "color": "#d62728", "label": "crash" }
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#d62728",
+              "label": "crash"
+            }
           ],
           [
             "SelfHealingSystem",
@@ -35,15 +40,26 @@
             "core-service",
             "FailureType",
             "timeout",
-            { "stat": "Sum", "period": 60, "color": "#ff7f0e", "label": "timeout" }
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#ff7f0e",
+              "label": "timeout"
+            }
           ]
         ],
         "view": "timeSeries",
         "stacked": false,
         "region": "us-east-1",
         "period": 60,
-        "yAxis": { "left": { "min": 0 } },
-        "legend": { "position": "bottom" }
+        "yAxis": {
+          "left": {
+            "min": 0
+          }
+        },
+        "legend": {
+          "position": "bottom"
+        }
       }
     },
     {
@@ -64,7 +80,12 @@
             "core-service",
             "Action",
             "restart_service",
-            { "stat": "Sum", "period": 60, "color": "#2ca02c", "label": "success" }
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#2ca02c",
+              "label": "success"
+            }
           ],
           [
             "SelfHealingSystem",
@@ -75,15 +96,26 @@
             "core-service",
             "Action",
             "restart_service",
-            { "stat": "Sum", "period": 60, "color": "#d62728", "label": "failure" }
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#d62728",
+              "label": "failure"
+            }
           ]
         ],
         "view": "timeSeries",
         "stacked": false,
         "region": "us-east-1",
         "period": 60,
-        "yAxis": { "left": { "min": 0 } },
-        "legend": { "position": "bottom" }
+        "yAxis": {
+          "left": {
+            "min": 0
+          }
+        },
+        "legend": {
+          "position": "bottom"
+        }
       }
     },
     {
@@ -104,7 +136,12 @@
             "core-service",
             "Action",
             "restart_service",
-            { "stat": "Average", "period": 60, "color": "#9467bd", "label": "avg ms" }
+            {
+              "stat": "Average",
+              "period": 60,
+              "color": "#9467bd",
+              "label": "avg ms"
+            }
           ],
           [
             "SelfHealingSystem",
@@ -115,15 +152,27 @@
             "core-service",
             "Action",
             "restart_service",
-            { "stat": "p99", "period": 60, "color": "#e377c2", "label": "p99 ms" }
+            {
+              "stat": "p99",
+              "period": 60,
+              "color": "#e377c2",
+              "label": "p99 ms"
+            }
           ]
         ],
         "view": "timeSeries",
         "stacked": false,
         "region": "us-east-1",
         "period": 60,
-        "yAxis": { "left": { "min": 0, "label": "milliseconds" } },
-        "legend": { "position": "bottom" }
+        "yAxis": {
+          "left": {
+            "min": 0,
+            "label": "milliseconds"
+          }
+        },
+        "legend": {
+          "position": "bottom"
+        }
       }
     },
     {
@@ -142,15 +191,26 @@
             "api-service",
             "TargetService",
             "core-service",
-            { "stat": "Sum", "period": 60, "color": "#ff7f0e", "label": "fallback calls" }
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#ff7f0e",
+              "label": "fallback calls"
+            }
           ]
         ],
         "view": "timeSeries",
         "stacked": false,
         "region": "us-east-1",
         "period": 60,
-        "yAxis": { "left": { "min": 0 } },
-        "legend": { "position": "bottom" }
+        "yAxis": {
+          "left": {
+            "min": 0
+          }
+        },
+        "legend": {
+          "position": "bottom"
+        }
       }
     },
     {
@@ -169,15 +229,26 @@
             "api-service",
             "TargetService",
             "core-service",
-            { "stat": "Sum", "period": 60, "color": "#d62728", "label": "opened" }
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#d62728",
+              "label": "opened"
+            }
           ]
         ],
         "view": "timeSeries",
         "stacked": false,
         "region": "us-east-1",
         "period": 60,
-        "yAxis": { "left": { "min": 0 } },
-        "legend": { "position": "bottom" }
+        "yAxis": {
+          "left": {
+            "min": 0
+          }
+        },
+        "legend": {
+          "position": "bottom"
+        }
       }
     },
     {
@@ -196,7 +267,12 @@
             "api-service",
             "TargetService",
             "core-service",
-            { "stat": "Maximum", "period": 60, "color": "#1f77b4", "label": "state" }
+            {
+              "stat": "Maximum",
+              "period": 60,
+              "color": "#1f77b4",
+              "label": "state"
+            }
           ]
         ],
         "view": "timeSeries",
@@ -212,12 +288,26 @@
         },
         "annotations": {
           "horizontal": [
-            { "label": "OPEN", "value": 2, "color": "#d62728" },
-            { "label": "HALF_OPEN", "value": 1, "color": "#ff7f0e" },
-            { "label": "CLOSED", "value": 0, "color": "#2ca02c" }
+            {
+              "label": "OPEN",
+              "value": 2,
+              "color": "#d62728"
+            },
+            {
+              "label": "HALF_OPEN",
+              "value": 1,
+              "color": "#ff7f0e"
+            },
+            {
+              "label": "CLOSED",
+              "value": 0,
+              "color": "#2ca02c"
+            }
           ]
         },
-        "legend": { "position": "bottom" }
+        "legend": {
+          "position": "bottom"
+        }
       }
     },
     {
@@ -227,27 +317,844 @@
       "width": 12,
       "height": 6,
       "properties": {
-        "title": "Lambda DLQ — Dead-Letter Messages (SQS)",
+        "title": "Lambda DLQ \u2014 Dead-Letter Messages (SQS)",
         "metrics": [
           [
             "AWS/SQS",
             "ApproximateNumberOfMessagesVisible",
             "QueueName",
             "SelfHealingLambdaDLQ",
-            { "stat": "Maximum", "period": 60, "color": "#d62728", "label": "DLQ messages" }
+            {
+              "stat": "Maximum",
+              "period": 60,
+              "color": "#d62728",
+              "label": "DLQ messages"
+            }
           ]
         ],
         "view": "timeSeries",
         "stacked": false,
         "region": "us-east-1",
         "period": 60,
-        "yAxis": { "left": { "min": 0, "label": "message count" } },
+        "yAxis": {
+          "left": {
+            "min": 0,
+            "label": "message count"
+          }
+        },
         "annotations": {
           "horizontal": [
-            { "label": "Alert threshold", "value": 1, "color": "#ff7f0e" }
+            {
+              "label": "Alert threshold",
+              "value": 1,
+              "color": "#ff7f0e"
+            }
           ]
         },
-        "legend": { "position": "bottom" }
+        "legend": {
+          "position": "bottom"
+        }
+      }
+    },
+    {
+      "type": "text",
+      "x": 0,
+      "y": 21,
+      "width": 24,
+      "height": 2,
+      "properties": {
+        "markdown": "## Phase 6 \u2014 Smart Recovery Intelligence\n**SmartRecoveryPolicy:** LOW \u2192 MEDIUM \u2192 HIGH (escalation) \u2192 CRITICAL (rollback recommended) | Severity tracked per failure window (5 min / 10 min)"
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 23,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "title": "Incident Severity Distribution (Phase 6)",
+        "metrics": [
+          [
+            "SelfHealingSystem",
+            "IncidentSeverityCount",
+            "ServiceName",
+            "core-service",
+            "Severity",
+            "LOW",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#2ca02c",
+              "label": "LOW"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "IncidentSeverityCount",
+            "ServiceName",
+            "core-service",
+            "Severity",
+            "MEDIUM",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#ff7f0e",
+              "label": "MEDIUM"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "IncidentSeverityCount",
+            "ServiceName",
+            "core-service",
+            "Severity",
+            "HIGH",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#d62728",
+              "label": "HIGH"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "IncidentSeverityCount",
+            "ServiceName",
+            "core-service",
+            "Severity",
+            "CRITICAL",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#7f0000",
+              "label": "CRITICAL"
+            }
+          ]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-east-1",
+        "period": 60,
+        "yAxis": {
+          "left": {
+            "min": 0
+          }
+        },
+        "legend": {
+          "position": "bottom"
+        }
+      }
+    },
+    {
+      "type": "metric",
+      "x": 8,
+      "y": 23,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "title": "Escalation Count \u2014 HIGH + CRITICAL (Phase 6)",
+        "metrics": [
+          [
+            "SelfHealingSystem",
+            "EscalationCount",
+            "ServiceName",
+            "recovery-agent",
+            "TargetService",
+            "core-service",
+            "Severity",
+            "HIGH",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#d62728",
+              "label": "HIGH escalation"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "EscalationCount",
+            "ServiceName",
+            "recovery-agent",
+            "TargetService",
+            "core-service",
+            "Severity",
+            "CRITICAL",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#7f0000",
+              "label": "CRITICAL escalation"
+            }
+          ]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-east-1",
+        "period": 60,
+        "yAxis": {
+          "left": {
+            "min": 0
+          }
+        },
+        "annotations": {
+          "horizontal": [
+            {
+              "label": "Alert threshold",
+              "value": 1,
+              "color": "#ff7f0e"
+            }
+          ]
+        },
+        "legend": {
+          "position": "bottom"
+        }
+      }
+    },
+    {
+      "type": "metric",
+      "x": 16,
+      "y": 23,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "title": "Rollback Recommended (Phase 6 dry-run)",
+        "metrics": [
+          [
+            "SelfHealingSystem",
+            "RollbackRecommendedCount",
+            "ServiceName",
+            "core-service",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#9467bd",
+              "label": "rollback recommended"
+            }
+          ]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-east-1",
+        "period": 60,
+        "yAxis": {
+          "left": {
+            "min": 0
+          }
+        },
+        "annotations": {
+          "horizontal": [
+            {
+              "label": "Rollback threshold",
+              "value": 1,
+              "color": "#d62728"
+            }
+          ]
+        },
+        "legend": {
+          "position": "bottom"
+        }
+      }
+    },
+    {
+      "type": "text",
+      "x": 0,
+      "y": 29,
+      "width": 24,
+      "height": 3,
+      "properties": {
+        "markdown": "## Phase 7 \u2014 Multi-Service Self-Healing\n\n**Registered services and their strategies:**  `core-service` \u2192 **restart** (fallback: fallback-service)  |  `payment-service` \u2192 **escalate** (critical, no fallback \u2014 operator intervention required)  |  `movie-service` \u2192 **fallback** (routes to fallback-service on CRITICAL)\n\nLambda reads `services_config.json` at init and applies the correct strategy per service automatically."
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 32,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Failures Detected by Service (Phase 7)",
+        "metrics": [
+          [
+            "SelfHealingSystem",
+            "FailureDetectedCount",
+            "ServiceName",
+            "core-service",
+            "FailureType",
+            "crash",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#d62728",
+              "label": "core-service"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "FailureDetectedCount",
+            "ServiceName",
+            "core-service",
+            "FailureType",
+            "timeout",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#ff7f0e",
+              "label": "core-service timeout"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "FailureDetectedCount",
+            "ServiceName",
+            "payment-service",
+            "FailureType",
+            "crash",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#9467bd",
+              "label": "payment-service"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "FailureDetectedCount",
+            "ServiceName",
+            "movie-service",
+            "FailureType",
+            "crash",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#1f77b4",
+              "label": "movie-service"
+            }
+          ]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-east-1",
+        "period": 60,
+        "yAxis": {
+          "left": {
+            "min": 0
+          }
+        },
+        "legend": {
+          "position": "bottom"
+        }
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12,
+      "y": 32,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Recovery Outcomes by Service (Phase 7)",
+        "metrics": [
+          [
+            "SelfHealingSystem",
+            "RecoverySuccessCount",
+            "ServiceName",
+            "recovery-agent",
+            "TargetService",
+            "core-service",
+            "Action",
+            "restart_service",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#2ca02c",
+              "label": "core-service success"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "RecoverySuccessCount",
+            "ServiceName",
+            "recovery-agent",
+            "TargetService",
+            "payment-service",
+            "Action",
+            "restart_service",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#17becf",
+              "label": "payment-service success"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "RecoverySuccessCount",
+            "ServiceName",
+            "recovery-agent",
+            "TargetService",
+            "movie-service",
+            "Action",
+            "enable_fallback",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#bcbd22",
+              "label": "movie-service success"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "RecoveryFailureCount",
+            "ServiceName",
+            "recovery-agent",
+            "TargetService",
+            "core-service",
+            "Action",
+            "restart_service",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#d62728",
+              "label": "core-service failed"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "RecoveryFailureCount",
+            "ServiceName",
+            "recovery-agent",
+            "TargetService",
+            "payment-service",
+            "Action",
+            "restart_service",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#9467bd",
+              "label": "payment-service failed"
+            }
+          ]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-east-1",
+        "period": 60,
+        "yAxis": {
+          "left": {
+            "min": 0
+          }
+        },
+        "legend": {
+          "position": "bottom"
+        }
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 38,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "title": "Incident Severity by Service (Lambda \u2014 Phase 7)",
+        "metrics": [
+          [
+            "SelfHealingSystem",
+            "IncidentSeverityCount",
+            "ServiceName",
+            "core-service",
+            "Severity",
+            "LOW",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#2ca02c",
+              "label": "core LOW"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "IncidentSeverityCount",
+            "ServiceName",
+            "core-service",
+            "Severity",
+            "MEDIUM",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#ff7f0e",
+              "label": "core MEDIUM"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "IncidentSeverityCount",
+            "ServiceName",
+            "core-service",
+            "Severity",
+            "HIGH",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#d62728",
+              "label": "core HIGH"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "IncidentSeverityCount",
+            "ServiceName",
+            "core-service",
+            "Severity",
+            "CRITICAL",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#8c0000",
+              "label": "core CRITICAL"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "IncidentSeverityCount",
+            "ServiceName",
+            "payment-service",
+            "Severity",
+            "HIGH",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#9467bd",
+              "label": "payment HIGH"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "IncidentSeverityCount",
+            "ServiceName",
+            "payment-service",
+            "Severity",
+            "CRITICAL",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#5c3792",
+              "label": "payment CRITICAL"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "IncidentSeverityCount",
+            "ServiceName",
+            "movie-service",
+            "Severity",
+            "LOW",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#1f77b4",
+              "label": "movie LOW"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "IncidentSeverityCount",
+            "ServiceName",
+            "movie-service",
+            "Severity",
+            "MEDIUM",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#17becf",
+              "label": "movie MEDIUM"
+            }
+          ]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-east-1",
+        "period": 60,
+        "yAxis": {
+          "left": {
+            "min": 0
+          }
+        },
+        "legend": {
+          "position": "bottom"
+        }
+      }
+    },
+    {
+      "type": "metric",
+      "x": 8,
+      "y": 38,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "title": "Escalations by Service \u2014 payment-service always escalates",
+        "metrics": [
+          [
+            "SelfHealingSystem",
+            "EscalationCount",
+            "ServiceName",
+            "core-service",
+            "Severity",
+            "HIGH",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#d62728",
+              "label": "core HIGH"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "EscalationCount",
+            "ServiceName",
+            "core-service",
+            "Severity",
+            "CRITICAL",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#8c0000",
+              "label": "core CRITICAL"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "EscalationCount",
+            "ServiceName",
+            "payment-service",
+            "Severity",
+            "HIGH",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#9467bd",
+              "label": "payment HIGH (escalate strategy)"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "EscalationCount",
+            "ServiceName",
+            "payment-service",
+            "Severity",
+            "CRITICAL",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#5c3792",
+              "label": "payment CRITICAL"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "EscalationCount",
+            "ServiceName",
+            "movie-service",
+            "Severity",
+            "HIGH",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#1f77b4",
+              "label": "movie HIGH"
+            }
+          ]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-east-1",
+        "period": 60,
+        "yAxis": {
+          "left": {
+            "min": 0
+          }
+        },
+        "annotations": {
+          "horizontal": [
+            {
+              "label": "Alert threshold",
+              "value": 1,
+              "color": "#ff7f0e"
+            }
+          ]
+        },
+        "legend": {
+          "position": "bottom"
+        }
+      }
+    },
+    {
+      "type": "metric",
+      "x": 16,
+      "y": 38,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "title": "Rollback Recommended by Service (Phase 7)",
+        "metrics": [
+          [
+            "SelfHealingSystem",
+            "RollbackRecommendedCount",
+            "ServiceName",
+            "core-service",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#d62728",
+              "label": "core-service"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "RollbackRecommendedCount",
+            "ServiceName",
+            "payment-service",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#9467bd",
+              "label": "payment-service"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "RollbackRecommendedCount",
+            "ServiceName",
+            "movie-service",
+            {
+              "stat": "Sum",
+              "period": 60,
+              "color": "#1f77b4",
+              "label": "movie-service"
+            }
+          ]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-east-1",
+        "period": 60,
+        "yAxis": {
+          "left": {
+            "min": 0
+          }
+        },
+        "annotations": {
+          "horizontal": [
+            {
+              "label": "Rollback threshold",
+              "value": 1,
+              "color": "#ff7f0e"
+            }
+          ]
+        },
+        "legend": {
+          "position": "bottom"
+        }
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 44,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Recovery Duration by Service (ms \u2014 Phase 7)",
+        "metrics": [
+          [
+            "SelfHealingSystem",
+            "RecoveryDurationMs",
+            "ServiceName",
+            "recovery-agent",
+            "TargetService",
+            "core-service",
+            "Action",
+            "restart_service",
+            {
+              "stat": "Average",
+              "period": 60,
+              "color": "#d62728",
+              "label": "core-service avg"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "RecoveryDurationMs",
+            "ServiceName",
+            "recovery-agent",
+            "TargetService",
+            "core-service",
+            "Action",
+            "restart_service",
+            {
+              "stat": "p99",
+              "period": 60,
+              "color": "#ff7f0e",
+              "label": "core-service p99"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "RecoveryDurationMs",
+            "ServiceName",
+            "recovery-agent",
+            "TargetService",
+            "payment-service",
+            "Action",
+            "restart_service",
+            {
+              "stat": "Average",
+              "period": 60,
+              "color": "#9467bd",
+              "label": "payment-service avg"
+            }
+          ],
+          [
+            "SelfHealingSystem",
+            "RecoveryDurationMs",
+            "ServiceName",
+            "recovery-agent",
+            "TargetService",
+            "movie-service",
+            "Action",
+            "enable_fallback",
+            {
+              "stat": "Average",
+              "period": 60,
+              "color": "#1f77b4",
+              "label": "movie-service avg"
+            }
+          ]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-east-1",
+        "period": 60,
+        "yAxis": {
+          "left": {
+            "min": 0,
+            "label": "milliseconds"
+          }
+        },
+        "legend": {
+          "position": "bottom"
+        }
+      }
+    },
+    {
+      "type": "text",
+      "x": 12,
+      "y": 44,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "markdown": "## Strategy Reference\n\n| Service | Strategy | Fallback | Critical |\n|---|---|---|---|\n| `core-service` | **restart** | fallback-service | No |\n| `payment-service` | **escalate** | \u2014 | **Yes** |\n| `movie-service` | **fallback** | fallback-service | No |\n\n**restart** \u2014 Recovery-agent restarts the container. Severity ladder: LOW \u2192 MEDIUM \u2192 HIGH \u2192 CRITICAL.\n\n**escalate** \u2014 Minimum severity forced to HIGH on every failure. Operator intervention required. No automatic fallback.\n\n**fallback** \u2014 On CRITICAL, Lambda logs `FALLBACK_AVAILABLE` and recovery-agent routes traffic to `fallback-service`."
       }
     }
   ]

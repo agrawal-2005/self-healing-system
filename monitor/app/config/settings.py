@@ -11,7 +11,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    # ── Services to monitor ───────────────────────────────────────────────────
+    # ── Phase 7: Service registry config ─────────────────────────────────────
+    # Path to services_config.json — relative to where monitor.py is run from.
+    # Override with SERVICES_CONFIG_PATH env var on EC2:
+    #   export SERVICES_CONFIG_PATH=/home/ubuntu/self-healing-system/services_config.json
+    services_config_path: str = "../services_config.json"
+
+    # ── Services to monitor (legacy fallback if config file is missing) ───────
     api_service_url: str      = "http://localhost:8000"
     core_service_url: str     = "http://localhost:8001"
     fallback_service_url: str = "http://localhost:8002"

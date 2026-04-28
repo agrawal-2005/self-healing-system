@@ -1,0 +1,33 @@
+{
+  "version": "1",
+  "description": "Phase 7 — Multi-Service Registry. Drives monitor, Lambda strategy, and recovery-agent allowlist.",
+  "services": [
+    {
+      "service_name": "core-service",
+      "health_url": "http://core-service:8001/health",
+      "container_name": "core-service",
+      "strategy": "restart",
+      "fallback_service": "fallback-service",
+      "critical": false,
+      "description": "Primary business logic service"
+    },
+    {
+      "service_name": "payment-service",
+      "health_url": "http://payment-service:8010/health",
+      "container_name": "payment-service",
+      "strategy": "escalate",
+      "fallback_service": null,
+      "critical": true,
+      "description": "Critical payment processor — no fallback, operator intervention required"
+    },
+    {
+      "service_name": "movie-service",
+      "health_url": "http://movie-service:8020/health",
+      "container_name": "movie-service",
+      "strategy": "fallback",
+      "fallback_service": "movie-fallback-service",
+      "critical": false,
+      "description": "Movie catalog service — falls back to cached responses on failure"
+    }
+  ]
+}

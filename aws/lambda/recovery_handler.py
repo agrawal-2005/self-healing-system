@@ -1,32 +1,29 @@
 """
-AWS Lambda — Recovery Handler (Phase 6).
+AWS Lambda — Recovery Handler (Phase 7).
 
-Phase 6 additions over Phase 5 (EC2 deployment):
-  - SmartRecoveryPolicy: replaces static _ACTION_MAP with severity-aware decisions
-      LOW/MEDIUM/HIGH  → restart_service  (crash/timeout)
-      CRITICAL         → enable_fallback  (crash/timeout, service too unstable)
-      any severity     → enable_fallback  (slow — always force fallback)
-  - Escalation: logs ESCALATION messages when severity ≥ HIGH
-  - RollbackManager: recommends rollback on CRITICAL severity (dry-run)
-  - CloudWatch metrics from Lambda:
-      IncidentSeverityCount  — one per invocation, dimension=Severity
-      EscalationCount        — only when is_escalated=True
-      RollbackRecommendedCount — only when ROLLBACK_RECOMMENDED
+Phase 7 additions over Phase 6:
+  - Multi-service support: service_name comes from the EventBridge event (not a hardcoded TARGET_SERVICE)
+  - Service registry: loads services_config.json at module init — strategy per service
+  - Strategy-aware recovery:
+      restart   → current Phase 6 behavior (restart_service or enable_fallback on CRITICAL)
+      fallback  → same as restart but logs FALLBACK_AVAILABLE with fallback service name
+      escalate  → minimum severity = HIGH on first failure, logs CRITICAL_SERVICE_NO_FALLBACK
+  - Backward compatible: if service not in config → default strategy=restart
 
-Phase 3/4/5 behaviour preserved:
-  - Retry logic: up to MAX_RETRIES attempts with exponential backoff
-  - Duration measurement + structured response
-  - Timeout guard: 15s per HTTP attempt
+Phase 6 behaviour preserved:
+  - SmartRecoveryPolicy: LOW/MEDIUM/HIGH/CRITICAL severity ladder
+  - Escalation: logs ESCALATION when severity ≥ HIGH
+  - RollbackManager: dry-run rollback recommendation on CRITICAL
+  - CloudWatch metrics: IncidentSeverityCount, EscalationCount, RollbackRecommendedCount
 
 Environment variables:
   RECOVERY_AGENT_URL     — URL of recovery-agent (e.g. http://54.x.x.x:8003)
-  TARGET_SERVICE         — default Docker container name (default: core-service)
+  TARGET_SERVICE         — fallback default if event has no service_name (default: core-service)
   RECOVERY_TOKEN         — shared secret sent as X-Recovery-Token header
   MAX_RETRIES            — how many attempts before giving up (default: 3)
   IMAGE_TAG              — image tag for rollback baseline (default: latest)
   CLOUDWATCH_ENABLED     — "true" to publish severity metrics (default: false)
   CLOUDWATCH_NAMESPACE   — CloudWatch namespace (default: SelfHealingSystem)
-  AWS_DEFAULT_REGION     — AWS region (default: us-east-1)
 """
 
 import json
@@ -54,18 +51,53 @@ CLOUDWATCH_NAMESPACE = os.environ.get("CLOUDWATCH_NAMESPACE", "SelfHealingSystem
 AWS_REGION           = os.environ.get("AWS_DEFAULT_REGION",   "us-east-1")
 
 # ── Module-level singletons (survive warm invocations) ────────────────────────
-_policy          = SmartRecoveryPolicy()
+_policy           = SmartRecoveryPolicy()
 _rollback_manager = RollbackManager()
-_cw_client: Optional[object] = None   # boto3 CloudWatch client, lazily initialised
+_cw_client: Optional[object] = None
 
 
 def _get_cw_client():
-    """Return a boto3 CloudWatch client, creating it once per container lifecycle."""
     global _cw_client
     if _cw_client is None and CLOUDWATCH_ENABLED:
         import boto3
         _cw_client = boto3.client("cloudwatch", region_name=AWS_REGION)
     return _cw_client
+
+
+# ── Phase 7: Service registry ─────────────────────────────────────────────────
+
+def _load_service_registry() -> dict[str, dict]:
+    """
+    Load services_config.json included in the Lambda zip.
+    Returns a dict keyed by service_name → config entry.
+    Falls back to empty dict (default strategy=restart for all services).
+    """
+    config_path = os.path.join(os.path.dirname(__file__), "services_config.json")
+    if not os.path.exists(config_path):
+        logger.warning("services_config.json not found — all services default to strategy=restart")
+        return {}
+    try:
+        with open(config_path, "r") as f:
+            config = json.load(f)
+        registry = {svc["service_name"]: svc for svc in config.get("services", [])}
+        logger.info("Service registry loaded: %s", list(registry.keys()))
+        return registry
+    except Exception as exc:
+        logger.error("Failed to load services_config.json: %s", exc)
+        return {}
+
+
+# Load once at module init (survives warm invocations)
+_service_registry: dict[str, dict] = _load_service_registry()
+
+
+def _get_service_config(service_name: str) -> dict:
+    """Return config for a service, or safe defaults if not in registry."""
+    return _service_registry.get(service_name, {
+        "strategy": "restart",
+        "fallback_service": None,
+        "critical": False,
+    })
 
 
 # ── Lambda handler ────────────────────────────────────────────────────────────
@@ -75,14 +107,15 @@ def lambda_handler(event: dict, context) -> dict:
     Entry point invoked by EventBridge.
 
     Flow:
-      1. Parse FailureEvent detail
-      2. SmartRecoveryPolicy.decide() → action + severity + escalation
-      3. RollbackManager baseline + check
-      4. Call recovery-agent (with retry)
-      5. evaluate_recovery_outcome() — upgrade to CRITICAL if recovery failed
-      6. Post-recovery rollback check (if newly CRITICAL)
-      7. Emit CloudWatch metrics (IncidentSeverityCount, EscalationCount,
-         RollbackRecommendedCount)
+      1. Parse FailureEvent detail (service_name comes from event — not hardcoded)
+      2. Look up service strategy from registry
+      3. SmartRecoveryPolicy.decide() → action + severity + escalation
+      4. Apply strategy overrides (escalate/fallback/restart)
+      5. RollbackManager baseline + check
+      6. Call recovery-agent (with retry)
+      7. evaluate_recovery_outcome() — upgrade to CRITICAL if recovery failed
+      8. Post-recovery rollback check
+      9. Emit CloudWatch metrics
     """
     request_id = getattr(context, "aws_request_id", "local")
     t_start    = time.monotonic()
@@ -105,8 +138,43 @@ def lambda_handler(event: dict, context) -> dict:
         request_id, service_name, failure_type, latency_ms, timestamp,
     )
 
-    # ── Step 2: SmartRecoveryPolicy decision ──────────────────────────────────
+    # ── Step 2: Service registry lookup ──────────────────────────────────────
+    svc_config       = _get_service_config(service_name)
+    strategy         = svc_config.get("strategy", "restart")
+    fallback_service = svc_config.get("fallback_service")
+    is_critical      = svc_config.get("critical", False)
+
+    logger.info(
+        "[%s] STRATEGY: service=%s  strategy=%s  fallback=%s  critical=%s",
+        request_id, service_name, strategy, fallback_service, is_critical,
+    )
+
+    # ── Step 3: SmartRecoveryPolicy decision ──────────────────────────────────
     decision = _policy.decide(service_name, failure_type)
+
+    # ── Step 4: Apply strategy overrides ──────────────────────────────────────
+    # escalate: minimum severity = HIGH even on first failure (no-fallback critical service)
+    if strategy == "escalate":
+        if decision.severity in (IncidentSeverity.LOW, IncidentSeverity.MEDIUM):
+            logger.warning(
+                "[%s] CRITICAL_SERVICE_NO_FALLBACK: %s has no fallback — "
+                "upgrading severity %s → HIGH. Operator intervention may be required.",
+                request_id, service_name, decision.severity.value,
+            )
+            decision.severity         = IncidentSeverity.HIGH
+            decision.is_escalated     = True
+            decision.escalation_reason = (
+                f"ESCALATION: {service_name} is a critical service with no fallback — "
+                f"severity forced to HIGH on every failure"
+            )
+
+    # fallback: when action would be enable_fallback, log the specific fallback service name
+    if strategy == "fallback" and decision.action == "enable_fallback" and fallback_service:
+        logger.info(
+            "[%s] FALLBACK_AVAILABLE: %s is CRITICAL — traffic should route to %s",
+            request_id, service_name, fallback_service,
+        )
+
     logger.info(
         "[%s] SmartRecoveryPolicy: action=%s  severity=%s  strategy=%s  "
         "count_5m=%d  count_10m=%d  escalated=%s",
@@ -119,14 +187,14 @@ def lambda_handler(event: dict, context) -> dict:
         decision.is_escalated,
     )
 
-    # ── Step 3: Record rollback baseline before recovery ──────────────────────
+    # ── Step 5: Record rollback baseline before recovery ──────────────────────
     _rollback_manager.record_baseline(service_name)
 
-    # ── Step 4: Call recovery-agent (with retry) ──────────────────────────────
+    # ── Step 6: Call recovery-agent (with retry) ──────────────────────────────
     reason = (
-        f"Lambda Phase6 — {failure_type} on {service_name} at {timestamp} | "
-        f"severity={decision.severity.value} strategy={decision.recovery_strategy} "
-        f"count_5m={decision.failure_count_5min}"
+        f"Lambda Phase7 — {failure_type} on {service_name} at {timestamp} | "
+        f"strategy={strategy} severity={decision.severity.value} "
+        f"strategy={decision.recovery_strategy} count_5m={decision.failure_count_5min}"
     )
     if decision.escalation_reason:
         reason += f" | {decision.escalation_reason}"
@@ -144,7 +212,7 @@ def lambda_handler(event: dict, context) -> dict:
 
     recovery_success = result.get("success", False)
 
-    # ── Step 5: Evaluate recovery outcome ─────────────────────────────────────
+    # ── Step 7: Evaluate recovery outcome ─────────────────────────────────────
     final_decision = _policy.evaluate_recovery_outcome(decision, recovery_success)
     if final_decision.severity != decision.severity:
         logger.error(
@@ -152,7 +220,7 @@ def lambda_handler(event: dict, context) -> dict:
             request_id, decision.severity.value, final_decision.severity.value,
         )
 
-    # ── Step 6: Record successful recovery / rollback check ───────────────────
+    # ── Step 8: Record successful recovery / rollback check ───────────────────
     if recovery_success:
         _rollback_manager.record_successful_recovery(service_name)
 
@@ -160,31 +228,35 @@ def lambda_handler(event: dict, context) -> dict:
     if _rollback_manager.should_recommend(service_name, final_decision.severity):
         rollback_image = _rollback_manager.recommend_rollback(service_name)
 
-    # ── Step 7: CloudWatch metrics ────────────────────────────────────────────
+    # ── Step 9: CloudWatch metrics ────────────────────────────────────────────
     _emit_metrics(
-        service_name    = service_name,
-        severity        = final_decision.severity,
-        is_escalated    = final_decision.is_escalated,
-        rollback_image  = rollback_image,
-        request_id      = request_id,
+        service_name   = service_name,
+        severity       = final_decision.severity,
+        is_escalated   = final_decision.is_escalated,
+        rollback_image = rollback_image,
+        request_id     = request_id,
     )
 
     # ── Finalise response ─────────────────────────────────────────────────────
     duration_ms = (time.monotonic() - t_start) * 1000
     result.update({
-        "request_id":        request_id,
-        "duration_ms":       round(duration_ms, 1),
-        "attempts":          attempts,
-        "severity":          final_decision.severity.value,
-        "recovery_strategy": final_decision.recovery_strategy,
-        "is_escalated":      final_decision.is_escalated,
+        "request_id":           request_id,
+        "duration_ms":          round(duration_ms, 1),
+        "attempts":             attempts,
+        "service_name":         service_name,
+        "strategy":             strategy,
+        "severity":             final_decision.severity.value,
+        "recovery_strategy":    final_decision.recovery_strategy,
+        "is_escalated":         final_decision.is_escalated,
         "rollback_recommended": rollback_image is not None,
     })
 
     logger.info(
-        "[%s] lambda_handler: complete — success=%s  severity=%s  "
-        "duration=%.0fms  attempts=%d  escalated=%s  rollback=%s",
+        "[%s] lambda_handler: complete — service=%s  strategy=%s  success=%s  "
+        "severity=%s  duration=%.0fms  attempts=%d  escalated=%s  rollback=%s",
         request_id,
+        service_name,
+        strategy,
         recovery_success,
         final_decision.severity.value,
         duration_ms,
@@ -205,7 +277,6 @@ def _emit_metrics(
     rollback_image: Optional[str],
     request_id: str,
 ) -> None:
-    """Emit Phase 6 CloudWatch metrics. Never raises — errors are logged only."""
     cw = _get_cw_client()
     if cw is None:
         return
@@ -265,15 +336,6 @@ def _call_recovery_agent_with_retry(
     escalation_reason: str,
     request_id: str,
 ) -> tuple[dict, int]:
-    """
-    Calls recovery-agent with exponential backoff retry.
-
-    Retry policy:
-      Attempt 1 — immediate
-      Attempt 2 — wait 2s  (only on network / URLError)
-      Attempt 3 — wait 4s
-      HTTP errors (4xx/5xx) NOT retried — logic problem, not transient.
-    """
     backoff_seconds = 2
     last_result: dict = {}
 
@@ -323,7 +385,6 @@ def _call_recovery_agent(
     escalation_reason: str,
     request_id: str,
 ) -> dict:
-    """Single HTTP POST to recovery-agent /action with enriched Phase 6 payload."""
     url = f"{RECOVERY_AGENT_URL}/action"
     payload = json.dumps({
         "action":            action,

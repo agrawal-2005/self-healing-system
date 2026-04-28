@@ -1,6 +1,6 @@
 # Self-Healing Distributed System
 
-> A production-grade distributed system that detects service failures, makes intelligent severity-aware recovery decisions through AWS Lambda, and restores full health — without human intervention.
+> A production-grade distributed system that detects service failures, makes intelligent severity-aware recovery decisions through AWS Lambda, and restores full health — without human intervention. Phase 7 extends this to a **multi-service platform** where each service carries its own recovery strategy, defined in a central registry.
 
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?style=flat-square&logo=fastapi&logoColor=white)
@@ -17,22 +17,30 @@
 
 > Deployed on AWS EC2 — `54.198.165.2`
 
-| Service | URL | Status |
+| Service | URL | Description |
 |---|---|---|
 | **api-service** | `http://54.198.165.2:8000/process` | Primary entry point |
 | **api-service health** | `http://54.198.165.2:8000/health` | Health check |
-| **core-service health** | `http://54.198.165.2:8001/health` | Primary service |
-| **fallback-service health** | `http://54.198.165.2:8002/health` | Fallback service |
+| **core-service health** | `http://54.198.165.2:8001/health` | Primary service (strategy: restart) |
+| **fallback-service health** | `http://54.198.165.2:8002/health` | Shared fallback service |
+| **payment-service health** | `http://54.198.165.2:8010/health` | Critical service (strategy: escalate) |
+| **movie-service health** | `http://54.198.165.2:8020/health` | Catalog service (strategy: fallback) |
 
 ```bash
-# Try it live — normal response
+# Normal response
 curl http://54.198.165.2:8000/process
 
-# Trigger a crash and watch the system self-heal
+# Trigger core-service crash → watch auto-recovery (restart strategy)
 curl -X POST http://54.198.165.2:8001/fail
 curl http://54.198.165.2:8000/process    # degraded=true (fallback active)
 sleep 30
 curl http://54.198.165.2:8000/process    # degraded=false (auto-recovered)
+
+# Trigger payment-service crash → Lambda forces severity=HIGH (escalate strategy)
+curl -X POST http://54.198.165.2:8010/fail
+
+# Trigger movie-service crash → Lambda routes to fallback-service (fallback strategy)
+curl -X POST http://54.198.165.2:8020/fail
 ```
 
 > **Note:** The EC2 instance may be stopped to avoid AWS costs. If the above URLs are unreachable, refer to the [Setup Instructions](#setup-instructions) to run locally.
@@ -67,9 +75,12 @@ flowchart TD
 
     subgraph EC2["🖥️ AWS EC2 — Docker Compose"]
         api["api-service :8000\nCircuit Breaker"]
-        core["core-service :8001\nprimary processor"]
-        fb["fallback-service :8002\ndegraded mode"]
-        mon["monitor\npoll /health every 5s"]
+        core["core-service :8001\nstrategy: restart"]
+        fb["fallback-service :8002\nshared fallback"]
+        pay["payment-service :8010\nstrategy: escalate (critical)"]
+        mov["movie-service :8020\nstrategy: fallback"]
+        mon["monitor\npoll /health every 5s\nreads services_config.json"]
+        cfg[["services_config.json\nservice registry"]]
 
         subgraph AGENT["🔁 recovery-agent :8003"]
             ra["1. Validate X-Recovery-Token\n2. docker restart / stop\n3. Write recovery_history.jsonl\n4. Emit CloudWatch metrics"]
@@ -80,24 +91,32 @@ flowchart TD
         eb["EventBridge\nSelfHealingFailureRule"]
 
         subgraph LAM["⚡ Lambda — RecoveryHandler"]
+            reg["Service Registry\nloads services_config.json"]
             policy["SmartRecoveryPolicy\nLOW / MEDIUM → restart\nHIGH → restart + escalation\nCRITICAL → enable_fallback"]
+            strat["Strategy Override\nrestart / escalate / fallback"]
             rollback["RollbackManager\ndry-run rollback\nrecommendation"]
         end
 
         dlq["SQS DLQ\nfailed Lambda events"]
-        cw["CloudWatch\nMetrics + Dashboard\n11 widgets"]
+        cw["CloudWatch\nMetrics + Dashboard\n20 widgets"]
     end
 
     client -->|GET /process| api
     api -->|circuit CLOSED| core
     api -->|circuit OPEN| fb
+    cfg -.->|drives| mon
+    cfg -.->|bundled in zip| LAM
     core -.->|health poll| mon
     fb -.->|health poll| mon
+    pay -.->|health poll| mon
+    mov -.->|health poll| mon
     api -->|FallbackUsed\nCircuitBreaker metrics| cw
-    mon -->|HTTP 503 detected| eb
-    mon -->|FailureDetected metric| cw
+    mon -->|ServiceFailureDetected event\n(service_name in detail)| eb
+    mon -->|FailureDetectedCount| cw
     eb -->|invoke| LAM
-    policy --> rollback
+    reg --> strat
+    policy --> strat
+    strat --> rollback
     LAM -->|POST /action\nX-Recovery-Token| ra
     LAM -.->|on hard failure| dlq
     LAM -->|IncidentSeverityCount\nEscalationCount\nRollbackRecommendedCount| cw
@@ -110,7 +129,7 @@ flowchart TD
 
 ## Phase Progression
 
-This project was built incrementally across 6 phases, each adding a production-grade capability:
+This project was built incrementally across 7 phases, each adding a production-grade capability:
 
 | Phase | What Was Built |
 |---|---|
@@ -120,6 +139,7 @@ This project was built incrementally across 6 phases, each adding a production-g
 | **Phase 4** | Lambda executes recovery — calls recovery-agent via HTTP to `docker restart` the failed container |
 | **Phase 5** | Production hardening — circuit breaker, CloudWatch metrics, SQS DLQ, event cooldown, EC2 deployment |
 | **Phase 6** | Advanced self-healing — SmartRecoveryPolicy, IncidentSeverity, escalation logic, RollbackManager, new CloudWatch widgets |
+| **Phase 7** | Multi-service platform — `services_config.json` registry, per-service strategies (restart/escalate/fallback), payment-service and movie-service added as real-world examples, 20-widget dashboard |
 
 ---
 
@@ -132,16 +152,21 @@ This project was built incrementally across 6 phases, each adding a production-g
 | **Fallback Handling** | 5 | api-service routes traffic to fallback-service while core-service recovers. |
 | **Event Cooldown** | 5 | 60s deduplication window prevents Lambda from firing multiple times per incident. |
 | **Secure Recovery** | 5 | `X-Recovery-Token` header + service allowlist protect recovery-agent from unauthorized calls. |
-| **CloudWatch Metrics** | 5 | 7 custom metrics across 3 services. Real-time failure and recovery visibility. |
+| **CloudWatch Metrics** | 5 | Custom metrics across all services. Real-time failure and recovery visibility. |
 | **Recovery Audit Log** | 5 | Every action appended to `recovery_history.jsonl` — permanent append-only log. |
 | **SQS Dead-Letter Queue** | 5 | Failed Lambda invocations captured for post-incident analysis. |
-| **EC2 Deployment** | 5 | All 4 Docker services deployed on AWS EC2, accessible over the internet. |
+| **EC2 Deployment** | 5 | All Docker services deployed on AWS EC2, accessible over the internet. |
 | **SmartRecoveryPolicy** | 6 | Decision engine mapping failure type + severity → correct recovery action. |
 | **IncidentSeverity** | 6 | Four-tier classification: LOW / MEDIUM / HIGH / CRITICAL based on failure frequency. |
 | **Escalation Logic** | 6 | Automatic escalation when failures exceed thresholds within sliding time windows. |
 | **Action Override** | 6 | CRITICAL severity overrides restart → enable_fallback to stop the unstable container. |
 | **RollbackManager** | 6 | Dry-run rollback recommendations logged when CRITICAL severity is reached. |
 | **Severity Metrics** | 6 | Three new CloudWatch metrics: IncidentSeverityCount, EscalationCount, RollbackRecommendedCount. |
+| **Service Registry** | 7 | `services_config.json` is the single source of truth — monitor, Lambda, and recovery-agent all load from it. Adding a new service requires zero code changes. |
+| **Per-Service Strategy** | 7 | Each service declares its recovery strategy: `restart`, `escalate`, or `fallback`. Lambda applies the correct strategy automatically. |
+| **Escalate Strategy** | 7 | Critical services with no fallback (payment-service) have every failure forced to minimum severity=HIGH. Operator intervention is always alerted. |
+| **Fallback Strategy** | 7 | Services with a declared fallback (movie-service) log `FALLBACK_AVAILABLE` with the target service name on CRITICAL, enabling traffic routing. |
+| **Multi-Service Dashboard** | 7 | 20-widget CloudWatch dashboard with Phase 7 section: per-service failures, recovery outcomes, severity, escalations, rollback, and duration broken down by service. |
 
 ---
 
@@ -151,13 +176,14 @@ This project was built incrementally across 6 phases, each adding a production-g
 |---|---|
 | **Services** | Python 3.12, FastAPI, uvicorn |
 | **Packaging** | Docker, Docker Compose |
-| **Health Monitor** | Python (requests, boto3) |
+| **Health Monitor** | Python (requests, boto3) — reads services_config.json dynamically |
+| **Service Registry** | `services_config.json` — drives monitor, Lambda, and recovery-agent |
 | **Event Bus** | AWS EventBridge |
 | **Serverless Recovery** | AWS Lambda (Python 3.12) |
-| **Decision Engine** | SmartRecoveryPolicy (custom, module-level state) |
+| **Decision Engine** | SmartRecoveryPolicy + strategy-aware overrides (Phase 7) |
 | **Infrastructure** | AWS EC2 (t2.micro, Ubuntu 22.04) |
 | **Dead-Letter Queue** | AWS SQS |
-| **Observability** | AWS CloudWatch (custom metrics + 11-widget dashboard) |
+| **Observability** | AWS CloudWatch (custom metrics + 20-widget dashboard) |
 | **Deployment** | AWS Systems Manager (SSM) send-command |
 | **Configuration** | pydantic-settings (env-based) |
 | **Testing** | pytest, 33-test suite (unit + integration) |
@@ -191,7 +217,8 @@ Step 3   Monitor detects HTTP 503 on core-service (5-second poll)
 Step 4   EventBridge rule matches → invokes Lambda
          Event cooldown prevents duplicate invocations for 60 seconds
 
-Step 5   Lambda: SmartRecoveryPolicy evaluates severity
+Step 5   Lambda: loads services_config.json → looks up core-service strategy = "restart"
+         SmartRecoveryPolicy evaluates severity:
          failure_count_5min=1 → LOW  → action = restart_service
          failure_count_5min=3 → HIGH → action = restart_service (+ escalation)
          failure_count_10min≥5→ CRITICAL → action = enable_fallback (action override)
@@ -208,6 +235,33 @@ Step 8   core-service restarts and passes health check
          Circuit breaker probes (HALF_OPEN) → success → CLOSED
          api-service resumes: { "source": "core-service", "degraded": false }
          Monitor clears cooldown. System fully healed.
+```
+
+### Phase 7 — Strategy-Aware Multi-Service Recovery
+
+The same pipeline applies to all registered services, but Lambda applies a different strategy depending on the service:
+
+```
+payment-service crash detected
+       │
+       ▼
+Lambda: strategy = "escalate" (critical=true, no fallback)
+       │
+       ├── SmartRecoveryPolicy: severity=LOW (first failure)
+       │
+       └── Strategy override: LOW → HIGH (forced minimum for critical services)
+           Logs: CRITICAL_SERVICE_NO_FALLBACK — operator intervention required
+           Emits: EscalationCount metric with ServiceName=payment-service
+
+movie-service crash detected
+       │
+       ▼
+Lambda: strategy = "fallback", fallback_service = "fallback-service"
+       │
+       ├── SmartRecoveryPolicy: if severity=CRITICAL → action=enable_fallback
+       │
+       └── Logs: FALLBACK_AVAILABLE — traffic should route to fallback-service
+           recovery-agent: docker stop movie-service (enable_fallback action)
 ```
 
 ### Circuit Breaker State Machine
@@ -240,6 +294,10 @@ Failure received
                   ├── count_5min  ≥ 2  → MEDIUM ─────────────► restart_service
                   │
                   └── count_5min  = 1  → LOW ───────────────► restart_service
+
+Phase 7 overlay:
+  strategy=escalate → minimum severity = HIGH regardless of failure count
+  strategy=fallback  → on enable_fallback, logs FALLBACK_AVAILABLE with fallback service name
 ```
 
 ---
@@ -277,17 +335,46 @@ The `SmartRecoveryPolicy` class inside Lambda replaces a static action map with 
 5th crash in 10min → CRITICAL → stop the container (enable_fallback)
 ```
 
-At CRITICAL, the system recognizes that restarting a service that keeps crashing is futile — it stops the container and routes all traffic through fallback until a human (or future Phase 7 automation) intervenes.
+At CRITICAL, the system recognizes that restarting a service that keeps crashing is futile — it stops the container and routes all traffic through fallback until a human intervenes.
+
+### Service Registry (Phase 7)
+
+`services_config.json` is the single source of truth for all services. Every component loads from it at startup:
+
+- **Monitor** — dynamically builds the list of URLs to poll. Adding a new service to the registry immediately starts monitoring it — no code change needed.
+- **Lambda** — loads the registry at module init (survives warm invocations). Reads each service's strategy, fallback target, and criticality.
+- **Recovery-agent** — `ALLOWED_SERVICES` env var is driven by the registry, whitelisting which containers the agent is permitted to restart.
+
+```json
+{
+  "service_name": "payment-service",
+  "health_url": "http://localhost:8010/health",
+  "container_name": "payment-service",
+  "strategy": "escalate",
+  "fallback_service": null,
+  "critical": true
+}
+```
+
+### Strategy-Aware Recovery (Phase 7)
+
+Each service declares one of three strategies:
+
+| Strategy | Behaviour | Example service |
+|---|---|---|
+| `restart` | Standard recovery. Severity ladder applies (LOW → CRITICAL). Falls back on CRITICAL. | core-service |
+| `escalate` | Minimum severity = HIGH on every failure. For critical services with no fallback — operator must be notified every time. | payment-service |
+| `fallback` | Same as restart, but logs `FALLBACK_AVAILABLE` with the named fallback service on CRITICAL. Enables traffic routing. | movie-service |
 
 ### Rollback Manager
 
 The `RollbackManager` class tracks the last-known-good image tag for each service. When severity reaches CRITICAL, it logs a `ROLLBACK_RECOMMENDED` event with the image reference:
 
 ```
-ROLLBACK_RECOMMENDED: service=core-service  image=core-service:latest  (Phase 6 dry-run)
+ROLLBACK_RECOMMENDED: service=core-service  image=core-service:latest  (dry-run)
 ```
 
-This is Phase 6 dry-run — the recommendation is logged but not executed. Phase 7 would implement the actual `docker pull` + container replacement. The CloudWatch `RollbackRecommendedCount` metric makes this visible in the dashboard.
+The recommendation is logged and emitted as a CloudWatch metric but not executed — a human or automation pipeline can act on it.
 
 ---
 
@@ -347,7 +434,7 @@ This is Phase 6 dry-run — the recommendation is logged but not executed. Phase
   "action": "restart_service",
   "target_service": "core-service",
   "message": "Container 'core-service' restarted successfully.",
-  "timestamp": "2026-04-27T19:10:06.361801+00:00",
+  "timestamp": "2026-04-28T10:00:00.000000+00:00",
   "command_result": {
     "success": true,
     "stdout": "core-service",
@@ -357,12 +444,37 @@ This is Phase 6 dry-run — the recommendation is logged but not executed. Phase
 }
 ```
 
+### payment-service — Port 8010 (Critical Service — Phase 7 Example)
+
+> Strategy: `escalate` — critical=true, no fallback. Every failure triggers minimum severity=HIGH.
+
+| Method | Endpoint | Description | Response |
+|---|---|---|---|
+| `GET` | `/health` | Returns 503 when crashed | `{"status": "healthy"/"unhealthy", "service": "payment-service"}` |
+| `GET` | `/process-payment` | Simulated payment processing | `{"message": "Payment processed", "service": "payment-service"}` |
+| `POST` | `/fail` | **Test only** — triggers a crash | `{"crashed": true}` |
+| `POST` | `/recover` | Manually resets failure flag | `{"crashed": false}` |
+
+### movie-service — Port 8020 (Fallback Strategy — Phase 7 Example)
+
+> Strategy: `fallback` — on CRITICAL, Lambda logs FALLBACK_AVAILABLE and routes to fallback-service.
+
+| Method | Endpoint | Description | Response |
+|---|---|---|---|
+| `GET` | `/health` | Returns 503 when crashed | `{"status": "healthy"/"unhealthy", "service": "movie-service"}` |
+| `GET` | `/catalog` | Returns movie catalog | `{"movies": [...], "service": "movie-service"}` |
+| `POST` | `/fail` | **Test only** — triggers a crash | `{"crashed": true}` |
+| `POST` | `/recover` | Manually resets failure flag | `{"crashed": false}` |
+
 ---
 
 ## Project Structure
 
 ```
 self-healing-system/
+│
+├── services_config.json               # Phase 7: single source of truth for all services
+│                                      # drives monitor URL list, Lambda strategy, agent allowlist
 │
 ├── api-service/                       # Entry point for client traffic (:8000)
 │   └── app/
@@ -372,27 +484,43 @@ self-healing-system/
 │       └── publishers/
 │           └── cloudwatch_publisher.py
 │
-├── core-service/                      # Primary business logic (:8001)
+├── core-service/                      # Primary business logic (:8001) — strategy: restart
 │   └── app/
-│       ├── routes/core_routes.py      # GET /process, POST /fail, GET /health
+│       ├── routes/core_routes.py      # GET /work, POST /fail, GET /health
 │       └── services/state_manager.py  # crashed/healthy state
 │
-├── fallback-service/                  # Degraded-mode backup (:8002)
+├── fallback-service/                  # Degraded-mode backup (:8002) — shared fallback
+│
+├── payment-service/                   # Phase 7 example (:8010) — strategy: escalate
+│   └── app/
+│       ├── routes/routes.py           # GET /process-payment, POST /fail, GET /health
+│       └── services/
+│           ├── payment_service.py     # payment processing logic
+│           └── state_manager.py       # crashed/healthy state
+│
+├── movie-service/                     # Phase 7 example (:8020) — strategy: fallback
+│   └── app/
+│       ├── routes/routes.py           # GET /catalog, POST /fail, GET /health
+│       └── services/
+│           ├── movie_service.py       # catalog logic (5 movies)
+│           └── state_manager.py       # crashed/healthy state
 │
 ├── recovery-agent/                    # Executes Docker commands (:8003)
 │   └── app/
 │       ├── services/
 │       │   ├── recovery_service.py    # restart / stop / start logic
 │       │   └── recovery_history.py    # append-only JSONL audit log
-│       ├── models/schemas.py          # ActionRequest with Phase 6 fields
+│       ├── models/schemas.py          # ActionRequest with Phase 6/7 fields
 │       └── publishers/
 │           └── cloudwatch_publisher.py
 │
 ├── monitor/                           # Health + latency monitor
+│   ├── monitor.py                     # Phase 7: loads services_config.json dynamically
 │   └── app/
 │       ├── checkers/
 │       │   ├── health_checker.py      # HTTP /health polling every 5s
 │       │   └── latency_checker.py     # SLOW / VERY_SLOW classification
+│       ├── config/settings.py         # services_config_path + feature flags
 │       ├── publishers/
 │       │   ├── eventbridge_publisher.py
 │       │   └── cloudwatch_publisher.py
@@ -402,15 +530,15 @@ self-healing-system/
 │
 ├── aws/
 │   ├── lambda/
-│   │   ├── recovery_handler.py        # Lambda entry point (Phase 6)
-│   │   ├── smart_recovery_policy.py   # IncidentSeverity + decision engine (Phase 6)
-│   │   ├── rollback_manager.py        # Dry-run rollback recommendations (Phase 6)
+│   │   ├── recovery_handler.py        # Phase 7: strategy-aware, loads service registry
+│   │   ├── smart_recovery_policy.py   # IncidentSeverity + decision engine
+│   │   ├── rollback_manager.py        # Dry-run rollback recommendations
 │   │   └── tests/
 │   │       ├── conftest.py
 │   │       ├── test_smart_recovery_policy.py  # 18 unit tests
 │   │       └── test_rollback_manager.py       # 15 unit tests
 │   ├── cloudwatch/
-│   │   ├── dashboard.json             # 11-widget CloudWatch dashboard
+│   │   ├── dashboard.json             # 20-widget CloudWatch dashboard (Phase 7)
 │   │   └── create_dashboard.sh
 │   └── setup/
 │       ├── eventbridge_rule.json
@@ -421,9 +549,13 @@ self-healing-system/
 │       ├── critical_core_failure_recovery.sh  # End-to-end chaos test
 │       └── verify_cloudwatch_metrics.sh
 │
-├── docker-compose.yml
+├── docker-compose.yml                 # All 6 services: api, core, fallback, agent, payment, movie
 ├── .env.example
 └── docs/
+    ├── screenshots/
+    │   ├── dashboard-overview.png
+    │   ├── recovery-pipeline.png
+    │   └── incident-intelligence.png
     └── phase5-ec2-deployment.md
 ```
 
@@ -449,7 +581,7 @@ self-healing-system/
 | EventBridge Rule | `SelfHealingFailureRule` |
 | SQS Dead-Letter Queue | `SelfHealingLambdaDLQ` |
 | CloudWatch Dashboard | `SelfHealingSystemDashboard` |
-| EC2 Instance | Ubuntu 22.04, ports 8000–8003 open |
+| EC2 Instance | Ubuntu 22.04, ports 8000–8003, 8010, 8020 open |
 
 ---
 
@@ -460,9 +592,9 @@ self-healing-system/
 git clone https://github.com/agrawal-2005/self-healing-system.git
 cd self-healing-system
 
-# 2. Start all 4 services
+# 2. Start all 6 services (core, fallback, api, agent, payment, movie)
 docker compose up --build -d
-docker compose ps   # all 4 should show (healthy)
+docker compose ps   # all 6 should show (healthy)
 
 # 3. Configure AWS credentials
 cp .env.example monitor/.env
@@ -471,15 +603,17 @@ cp .env.example monitor/.env
 #   AWS_SECRET_ACCESS_KEY=...
 #   AWS_DEFAULT_REGION=us-east-1
 
-# 4. Start the monitor
+# 4. Start the monitor (reads services_config.json automatically)
 cd monitor
-export $(grep -v '^#' .env | xargs)
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
 python3 monitor.py > /tmp/monitor.log 2>&1 &
 cd ..
 
-# 5. Deploy Lambda (Phase 6 — all 3 files required)
+# 5. Deploy Lambda (Phase 7 — all 4 files + registry required)
 cd aws/lambda
-zip recovery_handler.zip recovery_handler.py smart_recovery_policy.py rollback_manager.py
+cp ../../services_config.json .
+zip recovery_handler.zip recovery_handler.py smart_recovery_policy.py rollback_manager.py services_config.json
 
 aws lambda update-function-code \
   --function-name SelfHealingRecoveryHandler \
@@ -499,15 +633,6 @@ aws lambda update-function-configuration \
     CLOUDWATCH_NAMESPACE=SelfHealingSystem
   }" \
   --region us-east-1
-
-# 7. Grant Lambda permission to publish CloudWatch metrics
-aws iam put-role-policy \
-  --role-name <YOUR_LAMBDA_ROLE_NAME> \
-  --policy-name AllowCloudWatchPutMetrics \
-  --policy-document '{
-    "Version":"2012-10-17",
-    "Statement":[{"Effect":"Allow","Action":["cloudwatch:PutMetricData"],"Resource":"*"}]
-  }'
 ```
 
 ---
@@ -525,22 +650,32 @@ EC2="<your-ec2-public-ip>"
 aws ssm send-command \
   --instance-ids "$INSTANCE_ID" \
   --document-name "AWS-RunShellScript" \
-  --parameters 'commands=[
-    "export HOME=/root",
-    "git config --global --add safe.directory /home/ubuntu/self-healing-system",
-    "cd /home/ubuntu/self-healing-system",
-    "git pull origin main",
-    "docker compose up --build -d --wait"
-  ]' \
+  --parameters "{\"commands\":[
+    \"chown -R ubuntu:ubuntu /home/ubuntu/self-healing-system\",
+    \"sudo -u ubuntu bash -c 'cd /home/ubuntu/self-healing-system && git pull origin main'\",
+    \"docker compose up --build -d --wait\"
+  ]}" \
   --region us-east-1
 
-# 3. Verify services are healthy
+# 3. Verify all 6 services are healthy
 curl http://$EC2:8000/health    # api-service
 curl http://$EC2:8001/health    # core-service
 curl http://$EC2:8002/health    # fallback-service
 curl http://$EC2:8003/health    # recovery-agent
+curl http://$EC2:8010/health    # payment-service
+curl http://$EC2:8020/health    # movie-service
 
-# 4. Deploy Lambda pointing to EC2
+# 4. Restart monitor to pick up latest services_config.json
+aws ssm send-command \
+  --instance-ids "$INSTANCE_ID" \
+  --document-name "AWS-RunShellScript" \
+  --parameters "{\"commands\":[
+    \"pkill -f 'python3 monitor.py' || true\",
+    \"sudo -u ubuntu bash -c 'cd /home/ubuntu/self-healing-system/monitor && source .venv/bin/activate && nohup python3 monitor.py > /home/ubuntu/monitor.log 2>&1 &'\"
+  ]}" \
+  --region us-east-1
+
+# 5. Deploy Lambda pointing to EC2
 aws lambda update-function-configuration \
   --function-name SelfHealingRecoveryHandler \
   --environment "Variables={
@@ -548,7 +683,6 @@ aws lambda update-function-configuration \
     TARGET_SERVICE=core-service,
     RECOVERY_TOKEN=dev-token,
     MAX_RETRIES=3,
-    IMAGE_TAG=latest,
     CLOUDWATCH_ENABLED=true,
     CLOUDWATCH_NAMESPACE=SelfHealingSystem
   }" \
@@ -559,7 +693,7 @@ aws lambda update-function-configuration \
 
 ## Testing the System
 
-### Unit Tests (Lambda — Phase 6)
+### Unit Tests (Lambda)
 
 ```bash
 cd aws/lambda
@@ -593,7 +727,7 @@ curl http://$EC2:8000/process
 # { "source": "core-service", "degraded": false }
 ```
 
-#### Test 2 — Trigger a crash
+#### Test 2 — Trigger a crash (restart strategy)
 
 ```bash
 curl -X POST http://$EC2:8001/fail
@@ -607,17 +741,7 @@ curl http://$EC2:8000/process
 # { "source": "fallback-service", "degraded": true }
 ```
 
-#### Test 4 — Observe recovery in monitor logs
-
-```bash
-# EC2 deployment
-aws ssm send-command \
-  --instance-ids "$INSTANCE_ID" \
-  --document-name "AWS-RunShellScript" \
-  --parameters 'commands=["docker logs monitor --tail 20"]'
-```
-
-#### Test 5 — Confirm full recovery
+#### Test 4 — Confirm full recovery
 
 ```bash
 sleep 30
@@ -625,23 +749,58 @@ curl http://$EC2:8000/process
 # { "source": "core-service", "degraded": false }
 ```
 
-#### Test 6 — Phase 6 escalation demo (5 crashes, 65s apart)
+#### Test 5 — Phase 6 escalation demo (5 crashes, 65s apart)
 
 ```bash
-EC2=<your-ec2-ip>
 for i in 1 2 3 4 5; do
   curl -s -X POST http://$EC2:8001/fail
   echo "Crash $i triggered"
   sleep 65
 done
-# Crash 5 will trigger CRITICAL severity → enable_fallback + ROLLBACK_RECOMMENDED
+# Crash 5 → CRITICAL severity → enable_fallback + ROLLBACK_RECOMMENDED
+```
+
+#### Test 6 — Phase 7: payment-service escalate strategy
+
+```bash
+# First failure on payment-service — Lambda forces HIGH (not LOW)
+curl -X POST http://$EC2:8010/fail
+
+# Check Lambda logs for: CRITICAL_SERVICE_NO_FALLBACK
+# Severity will be HIGH on the very first failure (escalate strategy)
+```
+
+#### Test 7 — Phase 7: movie-service fallback strategy
+
+```bash
+# Trigger movie-service CRITICAL (5 crashes)
+for i in 1 2 3 4 5; do
+  curl -s -X POST http://$EC2:8020/fail
+  echo "Movie crash $i"
+  sleep 65
+done
+# On CRITICAL → Lambda logs: FALLBACK_AVAILABLE: movie-service → fallback-service
+```
+
+#### Test 8 — Phase 7: simultaneous multi-service failure
+
+```bash
+# Crash all three services at the same time
+curl -X POST http://$EC2:8001/fail &   # core-service
+curl -X POST http://$EC2:8010/fail &   # payment-service
+curl -X POST http://$EC2:8020/fail &   # movie-service
+wait
+
+# Each service triggers a separate EventBridge event → separate Lambda invocation
+# Lambda applies: restart (core), escalate→HIGH (payment), fallback (movie)
+# All three recover independently
 ```
 
 ---
 
 ## CloudWatch Dashboard
 
-Dashboard name: `SelfHealingSystemDashboard`
+Dashboard name: `SelfHealingSystemDashboard`  
 Namespace: `SelfHealingSystem`
 
 ### Live Dashboard Screenshots
@@ -660,17 +819,17 @@ Namespace: `SelfHealingSystem`
 
 ---
 
-### All 11 Widgets Explained
+### All 20 Widgets Explained
 
-#### Phase 5 Widgets
+#### Phase 1–5 Widgets
 
 | Widget | Metric | What It Shows |
 |---|---|---|
 | **Failure Detected** | `FailureDetectedCount` | Each spike = one crash/timeout detected by monitor and sent to EventBridge. Dimension: `failure_type`. |
-| **Recovery Outcomes** | `RecoverySuccessCount` / `RecoveryFailureCount` | Green = successful docker restart. Red = docker command failed. Ratio shows system reliability. |
-| **Average Recovery Duration** | `RecoveryDurationMs` | Time in ms from Lambda invocation to docker command completing. Lower = faster healing. |
-| **Fallback Used** | `FallbackUsedCount` | Each dot = one request that was served by fallback-service instead of core-service. |
-| **Circuit Breaker Opened** | `CircuitBreakerOpenCount` | Each dot = circuit transitioned to OPEN. Frequent openings indicate persistent instability. |
+| **Recovery Outcomes** | `RecoverySuccessCount` / `RecoveryFailureCount` | Green = successful docker restart. Red = docker command failed. |
+| **Average Recovery Duration** | `RecoveryDurationMs` | Time in ms from Lambda invocation to docker command completing. |
+| **Fallback Used** | `FallbackUsedCount` | Each dot = one request served by fallback-service instead of core-service. |
+| **Circuit Breaker Opened** | `CircuitBreakerOpenCount` | Each dot = circuit transitioned to OPEN. Frequent openings = persistent instability. |
 | **Circuit Breaker State** | `CircuitBreakerState` | Gauge: 0=CLOSED (healthy), 1=HALF_OPEN (probing), 2=OPEN (all traffic on fallback). |
 | **Lambda DLQ** | SQS `ApproximateNumberOfMessagesVisible` | Messages = Lambda hard-crashed. Zero = Lambda always handled events successfully. |
 
@@ -678,9 +837,23 @@ Namespace: `SelfHealingSystem`
 
 | Widget | Metric | What It Shows |
 |---|---|---|
-| **Incident Severity Distribution** | `IncidentSeverityCount` | Stacked lines per severity tier (LOW/MEDIUM/HIGH/CRITICAL). Shows whether failures are isolated or a pattern. |
-| **Escalation Count** | `EscalationCount` | Published only for HIGH and CRITICAL severity. Spikes here mean the system identified a persistent incident. |
-| **Rollback Recommended** | `RollbackRecommendedCount` | Published only when CRITICAL + RollbackManager baseline exists. Each count = one rollback recommendation logged. |
+| **Incident Severity Distribution** | `IncidentSeverityCount` | Lines per severity tier (LOW/MEDIUM/HIGH/CRITICAL). Shows whether failures are isolated or a pattern. |
+| **Escalation Count** | `EscalationCount` | Published only for HIGH and CRITICAL severity. Spikes = system identified a persistent incident. |
+| **Rollback Recommended** | `RollbackRecommendedCount` | Published when CRITICAL + baseline exists. Each count = one rollback recommendation logged. |
+
+#### Phase 7 Widgets (Multi-Service)
+
+| Widget | What It Shows |
+|---|---|
+| **Failures Detected by Service** | All 3 services on one chart — core-service, payment-service, movie-service. Isolates which service is failing. |
+| **Recovery Outcomes by Service** | Success/failure lines per service. Compare recovery rates across strategies. |
+| **Incident Severity by Service** | Severity breakdown per service. payment-service should only show HIGH/CRITICAL due to escalate strategy. |
+| **Escalations by Service** | payment-service appears on every single failure it has. core-service only appears after 3+ failures. |
+| **Rollback Recommended by Service** | Per-service rollback triggers. payment-service rollbacks are more frequent due to forced HIGH severity. |
+| **Recovery Duration by Service** | avg + p99 per service. Compares restart speed vs enable_fallback speed across strategies. |
+| **Strategy Reference** | Static table — core=restart, payment=escalate (critical, no fallback), movie=fallback (→ fallback-service). |
+
+---
 
 ### Custom Metrics Reference
 
@@ -690,12 +863,12 @@ Namespace: `SelfHealingSystem`
 | `FallbackUsedCount` | api-service | `ServiceName` |
 | `CircuitBreakerOpenCount` | api-service | `ServiceName` |
 | `CircuitBreakerState` | api-service | `ServiceName` |
-| `RecoverySuccessCount` | recovery-agent | `ServiceName`, `TargetService` |
-| `RecoveryFailureCount` | recovery-agent | `ServiceName`, `TargetService` |
-| `RecoveryDurationMs` | recovery-agent | `ServiceName`, `TargetService` |
-| `IncidentSeverityCount` | Lambda | `ServiceName`, `TargetService`, `Severity` |
-| `EscalationCount` | Lambda | `ServiceName`, `TargetService`, `Severity` |
-| `RollbackRecommendedCount` | Lambda | `ServiceName`, `TargetService` |
+| `RecoverySuccessCount` | recovery-agent | `ServiceName`, `TargetService`, `Action` |
+| `RecoveryFailureCount` | recovery-agent | `ServiceName`, `TargetService`, `Action` |
+| `RecoveryDurationMs` | recovery-agent | `ServiceName`, `TargetService`, `Action` |
+| `IncidentSeverityCount` | Lambda | `ServiceName`, `Severity` |
+| `EscalationCount` | Lambda | `ServiceName`, `Severity` |
+| `RollbackRecommendedCount` | Lambda | `ServiceName` |
 
 ### Suggested Alarms
 
@@ -711,7 +884,7 @@ aws cloudwatch put-metric-alarm \
   --alarm-actions <YOUR_SNS_ARN> \
   --region us-east-1
 
-# Alert on CRITICAL escalation
+# Alert on CRITICAL escalation for any service
 aws cloudwatch put-metric-alarm \
   --alarm-name "CriticalEscalation" \
   --namespace SelfHealingSystem \
@@ -722,23 +895,61 @@ aws cloudwatch put-metric-alarm \
   --evaluation-periods 1 \
   --alarm-actions <YOUR_SNS_ARN> \
   --region us-east-1
+
+# Alert specifically when payment-service escalates (critical service)
+aws cloudwatch put-metric-alarm \
+  --alarm-name "PaymentServiceEscalation" \
+  --namespace SelfHealingSystem \
+  --metric-name EscalationCount \
+  --dimensions Name=ServiceName,Value=payment-service Name=Severity,Value=HIGH \
+  --statistic Sum --period 60 --threshold 1 \
+  --comparison-operator GreaterThanOrEqualToThreshold \
+  --evaluation-periods 1 \
+  --alarm-actions <YOUR_SNS_ARN> \
+  --region us-east-1
 ```
 
 ---
 
 ## Sample Outputs
 
-### Monitor log during a recovery cycle
+### Monitor log — Phase 7 multi-service healthy
 
 ```
-2026-04-27 19:10:01 [monitor] INFO:    [OK]   api-service  status=UP   latency=6.7ms
-2026-04-27 19:10:01 [monitor] WARNING: HealthChecker [core-service]: HTTP 503 (4ms)
-2026-04-27 19:10:03 [monitor] INFO:    EventBridgePublisher: published event service=core-service failure=crash latency=13ms
-2026-04-27 19:10:06 [monitor] INFO:    [DOWN] core-service status=DOWN latency=4.4ms
-2026-04-27 19:10:11 [monitor] INFO:    EventCooldown: suppressing event service=core-service failure=crash (53s remaining)
-2026-04-27 19:10:44 [monitor] INFO:    EventCooldown: cleared 1 timer(s) for 'core-service' on recovery
-2026-04-27 19:10:44 [monitor] INFO:    [OK]   core-service status=UP   latency=11.0ms
-2026-04-27 19:10:44 [monitor] INFO:    All 3/3 services healthy
+2026-04-28 10:01:57 [monitor] INFO: [OK] core-service      status=UP   latency=2.9ms
+2026-04-28 10:01:57 [monitor] INFO: [OK] payment-service   status=UP   latency=2.9ms
+2026-04-28 10:01:57 [monitor] INFO: [OK] movie-service     status=UP   latency=2.7ms
+2026-04-28 10:01:57 [monitor] INFO: All 3/3 services healthy
+```
+
+### Monitor log — during a recovery cycle
+
+```
+2026-04-28 10:02:02 [monitor] ERROR: HealthChecker [core-service]: DOWN — Connection refused
+2026-04-28 10:02:02 [monitor] INFO:  EventBridgePublisher: published event service=core-service failure=crash
+2026-04-28 10:02:08 [monitor] INFO:  EventCooldown: cleared 1 timer(s) for 'core-service' on recovery
+2026-04-28 10:02:08 [monitor] INFO:  [OK] core-service     status=UP   latency=3.4ms
+2026-04-28 10:02:08 [monitor] INFO:  All 3/3 services healthy
+```
+
+### Lambda log — Phase 7 payment-service (escalate strategy)
+
+```
+STRATEGY: service=payment-service  strategy=escalate  fallback=None  critical=True
+SmartRecoveryPolicy: action=restart_service  severity=LOW  count_5m=1  escalated=False
+CRITICAL_SERVICE_NO_FALLBACK: payment-service has no fallback — upgrading severity LOW → HIGH
+lambda_handler: complete — service=payment-service  strategy=escalate  success=True
+  severity=HIGH  duration=312ms  attempts=1  escalated=True  rollback=False
+```
+
+### Lambda log — Phase 7 movie-service (fallback strategy, CRITICAL)
+
+```
+STRATEGY: service=movie-service  strategy=fallback  fallback=fallback-service  critical=False
+SmartRecoveryPolicy: action=enable_fallback  severity=CRITICAL  count_5m=4  count_10m=5
+FALLBACK_AVAILABLE: movie-service is CRITICAL — traffic should route to fallback-service
+lambda_handler: complete — service=movie-service  strategy=fallback  success=True
+  severity=CRITICAL  duration=287ms  attempts=1  escalated=True  rollback=True
 ```
 
 ### Lambda log — Phase 6 CRITICAL escalation
@@ -746,23 +957,23 @@ aws cloudwatch put-metric-alarm \
 ```
 SmartRecoveryPolicy: action=enable_fallback  severity=CRITICAL  strategy=fallback_on_critical  count_5m=4  count_10m=5
 ESCALATION: core-service failed 5x in 10 min — service is critically unstable — switching to enable_fallback
-ROLLBACK_RECOMMENDED: service=core-service  image=core-service:latest  (Phase 6 dry-run)
+ROLLBACK_RECOMMENDED: service=core-service  image=core-service:latest  (dry-run)
 lambda_handler: complete — success=True  severity=CRITICAL  duration=241ms  attempts=1  escalated=True  rollback=True
 ```
 
 ### recovery-agent log
 
 ```
-2026-04-27 19:10:06 [recovery_service] INFO: RecoveryService: action=restart_service  target=core-service  severity=LOW
-2026-04-27 19:10:06 [docker_executor]  INFO: DockerExecutor: running docker restart core-service
-2026-04-27 19:10:07 [recovery_history] INFO: RecoveryHistory: recorded action=restart_service service=core-service success=True duration=520ms
+2026-04-28 10:00:06 [recovery_service] INFO: action=restart_service  target=core-service  severity=LOW
+2026-04-28 10:00:06 [docker_executor]  INFO: running docker restart core-service
+2026-04-28 10:00:07 [recovery_history] INFO: recorded action=restart_service  service=core-service  success=True  duration=520ms
 ```
 
 ### Recovery history record (`recovery_history.jsonl`)
 
 ```json
 {
-  "timestamp": "2026-04-27T19:10:06.361801+00:00",
+  "timestamp": "2026-04-28T10:00:06.361801+00:00",
   "service_name": "core-service",
   "failure_type": "crash",
   "action": "restart_service",
@@ -777,22 +988,22 @@ lambda_handler: complete — success=True  severity=CRITICAL  duration=241ms  at
 }
 ```
 
-### Phase 6 CRITICAL record
+### Phase 7 payment-service record
 
 ```json
 {
-  "timestamp": "2026-04-27T19:15:44.892100+00:00",
-  "service_name": "core-service",
+  "timestamp": "2026-04-28T10:05:00.000000+00:00",
+  "service_name": "payment-service",
   "failure_type": "crash",
-  "action": "enable_fallback",
+  "action": "restart_service",
   "success": true,
-  "message": "Container 'core-service' stopped successfully.",
-  "recovery_duration_ms": 241.12,
+  "message": "Container 'payment-service' restarted successfully.",
+  "recovery_duration_ms": 312.45,
   "returncode": 0,
-  "severity": "CRITICAL",
-  "failure_count": 5,
-  "recovery_strategy": "fallback_on_critical",
-  "escalation_reason": "ESCALATION: core-service failed 5x in 10 min — service is critically unstable"
+  "severity": "HIGH",
+  "failure_count": 1,
+  "recovery_strategy": "standard_restart",
+  "escalation_reason": "ESCALATION: payment-service is a critical service with no fallback — severity forced to HIGH on every failure"
 }
 ```
 
@@ -807,19 +1018,6 @@ INFO:    CloudWatch: CircuitBreakerOpenCount+1  CircuitBreakerState=2
 WARNING: CircuitBreaker: OPEN — blocking core-service call (29s until probe)
 INFO:    CircuitBreaker: OPEN → HALF_OPEN after 30s cooldown
 INFO:    CircuitBreaker: HALF_OPEN → CLOSED (core-service recovered)
-INFO:    CloudWatch: CircuitBreakerState=0 (closed)
-```
-
-### api-service response — fallback active
-
-```json
-{ "source": "fallback-service", "degraded": true, "message": "Core service temporarily unavailable" }
-```
-
-### api-service response — fully recovered
-
-```json
-{ "source": "core-service", "degraded": false }
 ```
 
 ### Chaos test result
@@ -846,13 +1044,14 @@ INFO:    CloudWatch: CircuitBreakerState=0 (closed)
 | Improvement | Description |
 |---|---|
 | **ECS / Fargate deployment** | Replace Docker Compose with ECS tasks. Remove direct EC2 access — recovery-agent runs inside the same VPC as Lambda, eliminating token-over-HTTP security concerns. |
-| **Auto rollback execution** | Phase 6 logs rollback recommendations (dry-run). Phase 7 would execute `docker pull` + container replacement when recovery fails after N retries. |
+| **Auto rollback execution** | Phase 7 logs rollback recommendations (dry-run). A future phase would execute `docker pull <previous-tag>` + container replacement when recovery fails after N retries. |
 | **AI-based anomaly detection** | Replace threshold-based latency checks with a time-series model (e.g. AWS Lookout for Metrics) that detects statistical anomalies without fixed thresholds. |
 | **Multi-region failover** | Replicate the EventBridge → Lambda → recovery pipeline across two regions. Promote secondary on primary failure. |
-| **Slack / PagerDuty alerts** | Wire CloudWatch alarms → SNS → Lambda → Slack webhook. On-call engineers receive a message with recovery status and severity within seconds of detection. |
+| **Slack / PagerDuty alerts** | Wire CloudWatch alarms → SNS → Lambda → Slack webhook. On-call engineers receive a message with recovery status and severity within seconds of detection. Especially important for `escalate` strategy services. |
 | **DynamoDB failure history** | Replace module-level in-memory failure tracking with DynamoDB for persistence across cold Lambda starts and multi-Lambda deployments. |
-| **Recovery runbooks** | Store runbooks in S3. Lambda fetches and executes the correct runbook for each `failure_type`, enabling service-specific recovery procedures. |
-| **Chaos engineering suite** | Extend with slow-response, OOM, and partial-failure scenarios using `tc` (traffic control) or Pumba for realistic fault injection. |
+| **Recovery runbooks** | Store runbooks in S3. Lambda fetches the correct runbook for each `failure_type`, enabling service-specific recovery procedures beyond restart/fallback. |
+| **Chaos engineering suite** | Extend with slow-response, OOM, and partial-failure scenarios using `tc` (traffic control) or Pumba for realistic fault injection across all registered services. |
+| **Dynamic strategy updates** | Hot-reload `services_config.json` from S3 on each Lambda invocation so strategy changes take effect without redeploying the Lambda zip. |
 
 ---
 
@@ -869,10 +1068,11 @@ The architecture mirrors patterns used in production at large-scale engineering 
 - **Kubernetes liveness probes + restart policies** — container-level automatic recovery
 - **PagerDuty + runbook automation** — event-driven remediation without human toil
 - **Progressive severity escalation** — the same pattern used by major incident management platforms (PagerDuty, OpsGenie) to route alerts to the right responder at the right urgency level
+- **Service mesh policy (Istio/Linkerd)** — per-service traffic management policies, mirrored here as per-service recovery strategies in the registry
 
-The difference is that this system is fully observable, fully tested, and demonstrates these patterns end-to-end in a real AWS environment. Every component — the circuit breaker state machine, the event cooldown, the severity-based decision engine, the token-authenticated recovery agent, the CloudWatch dashboard — is a simplified but structurally faithful implementation of what runs in real production infrastructure.
+The difference is that this system is fully observable, fully tested, and demonstrates these patterns end-to-end in a real AWS environment. Every component — the circuit breaker state machine, the event cooldown, the severity-based decision engine, the strategy-aware service registry, the token-authenticated recovery agent, the 20-widget CloudWatch dashboard — is a simplified but structurally faithful implementation of what runs in real production infrastructure.
 
-For an SRE or DevOps engineer, this is a working demonstration of **toil reduction**: turning reactive firefighting into proactive, automated, and escalation-aware recovery.
+For an SRE or DevOps engineer, this is a working demonstration of **toil reduction**: turning reactive firefighting into proactive, automated, and escalation-aware recovery across an entire service fleet.
 
 ---
 
@@ -892,4 +1092,4 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 
 <p align="center">Star this repo if it helped you understand self-healing infrastructure patterns.</p>
 
-<p align="center">Built to demonstrate production-grade SRE patterns: circuit breaking, intelligent escalation, and automated recovery.</p>
+<p align="center">Built to demonstrate production-grade SRE patterns: circuit breaking, intelligent escalation, strategy-aware recovery, and multi-service observability.</p>

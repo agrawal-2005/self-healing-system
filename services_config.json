@@ -4,7 +4,7 @@
   "services": [
     {
       "service_name": "core-service",
-      "health_url": "http://core-service:8001/health",
+      "health_url": "http://localhost:8001/health",
       "container_name": "core-service",
       "strategy": "restart",
       "fallback_service": "fallback-service",
@@ -13,7 +13,7 @@
     },
     {
       "service_name": "payment-service",
-      "health_url": "http://payment-service:8010/health",
+      "health_url": "http://localhost:8010/health",
       "container_name": "payment-service",
       "strategy": "escalate",
       "fallback_service": null,
@@ -22,7 +22,7 @@
     },
     {
       "service_name": "movie-service",
-      "health_url": "http://movie-service:8020/health",
+      "health_url": "http://localhost:8020/health",
       "container_name": "movie-service",
       "strategy": "fallback",
       "fallback_service": "fallback-service",

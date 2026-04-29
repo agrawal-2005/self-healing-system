@@ -15,32 +15,32 @@
 
 ## Live Demo
 
-> Deployed on AWS EC2 — `54.198.165.2`
+> Deployed on AWS EC2 — `54.224.134.71`
 
 | Service | URL | Description |
 |---|---|---|
-| **api-service** | `http://54.198.165.2:8000/process` | Primary entry point |
-| **api-service health** | `http://54.198.165.2:8000/health` | Health check |
-| **core-service health** | `http://54.198.165.2:8001/health` | Primary service (strategy: restart) |
-| **fallback-service health** | `http://54.198.165.2:8002/health` | Shared fallback service |
-| **payment-service health** | `http://54.198.165.2:8010/health` | Critical service (strategy: escalate) |
-| **movie-service health** | `http://54.198.165.2:8020/health` | Catalog service (strategy: fallback) |
+| **api-service** | `http://54.224.134.71:8000/process` | Primary entry point |
+| **api-service health** | `http://54.224.134.71:8000/health` | Health check |
+| **core-service health** | `http://54.224.134.71:8001/health` | Primary service (strategy: restart) |
+| **fallback-service health** | `http://54.224.134.71:8002/health` | Shared fallback service |
+| **payment-service health** | `http://54.224.134.71:8010/health` | Critical service (strategy: escalate) |
+| **movie-service health** | `http://54.224.134.71:8020/health` | Catalog service (strategy: fallback) |
 
 ```bash
 # Normal response
-curl http://54.198.165.2:8000/process
+curl http://54.224.134.71:8000/process
 
 # Trigger core-service crash → watch auto-recovery (restart strategy)
-curl -X POST http://54.198.165.2:8001/fail
-curl http://54.198.165.2:8000/process    # degraded=true (fallback active)
+curl -X POST http://54.224.134.71:8001/fail
+curl http://54.224.134.71:8000/process    # degraded=true (fallback active)
 sleep 30
-curl http://54.198.165.2:8000/process    # degraded=false (auto-recovered)
+curl http://54.224.134.71:8000/process    # degraded=false (auto-recovered)
 
 # Trigger payment-service crash → Lambda forces severity=HIGH (escalate strategy)
-curl -X POST http://54.198.165.2:8010/fail
+curl -X POST http://54.224.134.71:8010/fail
 
 # Trigger movie-service crash → Lambda routes to fallback-service (fallback strategy)
-curl -X POST http://54.198.165.2:8020/fail
+curl -X POST http://54.224.134.71:8020/fail
 ```
 
 > **Note:** The EC2 instance may be stopped to avoid AWS costs. If the above URLs are unreachable, refer to the [Setup Instructions](#setup-instructions) to run locally.

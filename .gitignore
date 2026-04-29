@@ -18,6 +18,7 @@ venv/
 # Lambda build artifacts — not needed in source control
 *.zip
 lambda-package/
+aws/lambda/services_config.json
 
 # Recovery agent runtime data — keep the directory, ignore the data files
 recovery-agent/data/*.jsonl

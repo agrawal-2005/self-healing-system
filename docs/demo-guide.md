@@ -20,8 +20,8 @@ Wait ~60 seconds. All 6 Docker containers start automatically (`restart: unless-
 
 > **Important:** After starting EC2, verify core-service and fallback-service are running:
 > ```bash
-> curl http://54.198.165.2:8001/health   # should return {"status":"healthy"}
-> curl http://54.198.165.2:8002/health   # should return {"status":"healthy"}
+> curl http://54.224.134.71:8001/health   # should return {"status":"healthy"}
+> curl http://54.224.134.71:8002/health   # should return {"status":"healthy"}
 > ```
 > If either returns an error, run:
 > ```bash
@@ -35,7 +35,7 @@ Wait ~60 seconds. All 6 Docker containers start automatically (`restart: unless-
 ## Step 1 — Show all services are live (~30 sec)
 
 ```bash
-EC2=54.198.165.2
+EC2=54.224.134.71
 
 curl http://$EC2:8001/health   # core-service     (strategy: restart)
 curl http://$EC2:8010/health   # payment-service  (strategy: escalate — critical)

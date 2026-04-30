@@ -102,7 +102,7 @@ PAYLOAD=$(cat <<EOF
 EOF
 )
 
-HTTP_RESPONSE="$(curl -sS -w "\nHTTP_CODE:%{http_code}" -X POST "$RECOVERY_AGENT_URL/recover" \
+HTTP_RESPONSE="$(curl -sS -w "\nHTTP_CODE:%{http_code}" -X POST "$RECOVERY_AGENT_URL/action" \
   -H "Content-Type: application/json" \
   -H "X-Recovery-Token: $RECOVERY_TOKEN" \
   -d "$PAYLOAD" 2>&1)"

@@ -26,6 +26,13 @@ class Settings(BaseSettings):
     cloudwatch_namespace: str  = "SelfHealingSystem"
     aws_region: str            = "us-east-1"
 
+    # ── S3 crash report storage ───────────────────────────────────────────────
+    # When set, real crash reports are also uploaded to S3 so they survive
+    # EC2 restarts and are viewable in the AWS console. Test reports are
+    # never uploaded. Leave empty to keep reports local-only.
+    s3_crash_reports_bucket: str = ""
+    s3_crash_reports_prefix: str = "incidents"
+
     # extra="ignore" so that AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY loaded
     # from env_file don't cause a validation error (boto3 reads them directly).
     model_config = SettingsConfigDict(

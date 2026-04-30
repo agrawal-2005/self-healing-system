@@ -30,6 +30,7 @@ from fastapi import HTTPException
 
 from app.models.schemas import ActionRequest, ActionResponse, ActionType, HealthResponse
 from app.publishers.cloudwatch_publisher import CloudWatchMetricsPublisher
+from app.publishers.s3_crash_report_publisher import S3CrashReportPublisher
 from app.services.docker_executor import DockerExecutor
 from app.services.recovery_history import IncidentRecord, RecoveryHistoryRepository
 
@@ -45,6 +46,7 @@ class RecoveryService:
         history_repository: RecoveryHistoryRepository,
         cloudwatch_publisher: CloudWatchMetricsPublisher,
         crash_reports_dir: str = "/app/data/crash_reports",
+        s3_crash_publisher: S3CrashReportPublisher | None = None,
     ) -> None:
         self.docker_executor      = docker_executor
         self.service_name         = service_name
@@ -52,6 +54,7 @@ class RecoveryService:
         self.history_repository   = history_repository
         self.cloudwatch_publisher = cloudwatch_publisher
         self.crash_reports_dir    = crash_reports_dir
+        self.s3_crash_publisher   = s3_crash_publisher
         # Two subfolders so real incidents stay clean and discoverable:
         #   incidents/ — production CRITICAL escalations from Lambda
         #   tests/     — manual tests, marked with [TEST] in reason field
@@ -258,6 +261,19 @@ class RecoveryService:
             )
         except OSError as exc:
             logger.error("RecoveryService: failed to write crash report → %s", exc)
+            return filepath
+
+        # Upload real incidents to S3 for durable, AWS-console-accessible storage.
+        # Test reports (is_test=True) are skipped inside the publisher.
+        if self.s3_crash_publisher is not None:
+            s3_uri = self.s3_crash_publisher.upload(
+                local_path     = filepath,
+                target_service = request.target_service,
+                is_test        = is_test,
+            )
+            if s3_uri:
+                logger.info("RecoveryService: crash report mirrored to S3 → %s", s3_uri)
+
         return filepath
 
     def _disable_fallback(self, request: ActionRequest) -> ActionResponse:

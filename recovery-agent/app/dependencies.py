@@ -4,6 +4,7 @@ Dependency injection wiring for recovery-agent.
 
 from app.config.settings import settings
 from app.publishers.cloudwatch_publisher import CloudWatchMetricsPublisher
+from app.publishers.s3_crash_report_publisher import S3CrashReportPublisher
 from app.services.docker_executor import DockerExecutor
 from app.services.recovery_history import RecoveryHistoryRepository
 from app.services.recovery_service import RecoveryService
@@ -20,6 +21,12 @@ _cloudwatch_publisher = CloudWatchMetricsPublisher(
     enabled   = settings.cloudwatch_enabled,
 )
 
+_s3_crash_publisher = S3CrashReportPublisher(
+    bucket = settings.s3_crash_reports_bucket,
+    region = settings.aws_region,
+    prefix = settings.s3_crash_reports_prefix,
+)
+
 _recovery_service = RecoveryService(
     docker_executor      = _docker_executor,
     service_name         = settings.service_name,
@@ -31,6 +38,7 @@ _recovery_service = RecoveryService(
     history_repository   = _history_repository,
     cloudwatch_publisher = _cloudwatch_publisher,
     crash_reports_dir    = settings.crash_reports_dir,
+    s3_crash_publisher   = _s3_crash_publisher,
 )
 
 

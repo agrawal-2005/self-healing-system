@@ -114,6 +114,10 @@ services:
       CLOUDWATCH_ENABLED: "true"
       CLOUDWATCH_NAMESPACE: "SelfHealingSystem"
       AWS_DEFAULT_REGION: "us-east-1"
+      # ── S3 crash report storage (real incidents only) ──
+      # Set the bucket env var to enable; leave empty to keep reports local-only.
+      S3_CRASH_REPORTS_BUCKET: "${S3_CRASH_REPORTS_BUCKET:-}"
+      S3_CRASH_REPORTS_PREFIX: "incidents"
     volumes:
       # Mount the host Docker socket — required for docker CLI to work inside container
       - /var/run/docker.sock:/var/run/docker.sock

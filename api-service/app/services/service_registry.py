@@ -110,6 +110,12 @@ class ServiceRegistry:
             if not gateway_url or not gateway_endpoint:
                 continue
 
+            if not name:
+                logger.warning(
+                    "ServiceRegistry: skipping entry with empty service_name — %r", entry
+                )
+                continue
+
             strategy = entry.get("strategy", "fallback")
             if strategy not in VALID_STRATEGIES:
                 logger.warning(
@@ -118,7 +124,24 @@ class ServiceRegistry:
                 )
                 strategy = "fallback"
 
-            timeout = float(entry.get("timeout", default_timeout))
+            # Validate timeout: a 0 or negative value would make every call
+            # raise immediately, masking the underlying service as "always
+            # failing" and thrashing the circuit breaker.
+            try:
+                timeout = float(entry.get("timeout", default_timeout))
+            except (TypeError, ValueError):
+                logger.warning(
+                    "ServiceRegistry [%s]: invalid timeout %r — using default %.1fs",
+                    name, entry.get("timeout"), default_timeout,
+                )
+                timeout = float(default_timeout)
+            if timeout <= 0:
+                logger.warning(
+                    "ServiceRegistry [%s]: non-positive timeout %.2f — using default %.1fs",
+                    name, timeout, default_timeout,
+                )
+                timeout = float(default_timeout)
+
             full_url = f"{gateway_url.rstrip('/')}{gateway_endpoint}"
 
             cb = CircuitBreaker(

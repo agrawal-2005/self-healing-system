@@ -217,7 +217,10 @@ class RecoveryService:
         File name: <service>_<UTC-timestamp>.txt
         e.g.  core-service_2026-04-30T22-31-05Z.txt
         """
-        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
+        # Microseconds avoid filename collisions when Lambda retries the same
+        # incident within 1s of the previous attempt — the second write would
+        # otherwise silently overwrite the first crash report.
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S-%fZ")
         filename = f"{request.target_service}_{ts}.txt"
 
         is_test = bool(request.reason) and request.reason.strip().upper().startswith("[TEST]")

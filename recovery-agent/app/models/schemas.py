@@ -9,7 +9,7 @@ CommandResult  — structured result from DockerExecutor
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ActionType(str, Enum):
@@ -40,7 +40,16 @@ class ActionRequest(BaseModel):
     escalation_reason  — human-readable escalation message when severity >= HIGH
     """
     action: ActionType
-    target_service: str = "core-service"
+    # Restrict to Docker-safe names so the value cannot be a path fragment
+    # (e.g. "../../etc/passwd") that escapes the crash-report directory.
+    # The allowlist in RecoveryService is the primary control; this is
+    # defence in depth at the deserialization boundary.
+    target_service: str = Field(
+        default="core-service",
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$",
+    )
     reason: str = ""
 
     # Phase 6 — optional, default None so older Lambda payloads still validate

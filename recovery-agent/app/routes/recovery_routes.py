@@ -9,6 +9,8 @@ Security:
   GET /health is intentionally NOT token-protected (load balancers need it).
 """
 
+import hmac
+
 from fastapi import APIRouter, Depends, Header, HTTPException
 
 from app.config.settings import settings
@@ -32,10 +34,13 @@ def _verify_token(x_recovery_token: str = Header(default="")) -> None:
       Set RECOVERY_TOKEN env var on both recovery-agent and Lambda.
       If RECOVERY_TOKEN is empty, validation is skipped (useful for local testing
       without docker-compose env vars set — set it to a real value in production).
+
+    hmac.compare_digest() is used to avoid leaking the token via
+    early-exit timing differences in `==`.
     """
     if not settings.recovery_token:
         return  # token check disabled (empty string = open access)
-    if x_recovery_token != settings.recovery_token:
+    if not hmac.compare_digest(x_recovery_token or "", settings.recovery_token):
         raise HTTPException(
             status_code=401,
             detail="Invalid or missing X-Recovery-Token header.",

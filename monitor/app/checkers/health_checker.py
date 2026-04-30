@@ -41,7 +41,12 @@ class HealthChecker:
         start     = time.monotonic()
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            # follow_redirects=False — a healthy service returns 200 directly.
+            # A redirect would indicate misconfiguration (load balancer, auth
+            # gate) and should be treated as DOWN, not silently followed.
+            async with httpx.AsyncClient(
+                timeout=self.timeout, follow_redirects=False
+            ) as client:
                 resp = await client.get(url)
             latency_ms = (time.monotonic() - start) * 1000
 

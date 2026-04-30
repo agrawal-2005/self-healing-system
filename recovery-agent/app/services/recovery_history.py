@@ -11,6 +11,7 @@ File location: /app/data/recovery_history.jsonl (override via RECOVERY_HISTORY_P
 Host path:     ./recovery-agent/data/recovery_history.jsonl (see docker-compose.yml)
 """
 
+import fcntl
 import json
 import logging
 from datetime import datetime, timezone
@@ -75,10 +76,20 @@ class RecoveryHistoryRepository:
 
     def write_record(self, record: IncidentRecord) -> None:
         """Append one record to the JSONL file. Never raises — a history write failure
-        must not abort the recovery action that already succeeded."""
+        must not abort the recovery action that already succeeded.
+
+        Uses fcntl.flock for cross-process exclusivity. If two recovery requests
+        land at once (e.g. Lambda retries on timeout) we still want each line to
+        be written atomically, not interleaved.
+        """
         try:
             with self.file_path.open("a", encoding="utf-8") as f:
-                f.write(record.model_dump_json() + "\n")
+                try:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                    f.write(record.model_dump_json() + "\n")
+                    f.flush()
+                finally:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
             logger.info(
                 "RecoveryHistory: recorded action=%s service=%s success=%s duration=%.0fms",
                 record.action, record.service_name, record.success, record.recovery_duration_ms,

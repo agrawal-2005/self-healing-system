@@ -15,6 +15,7 @@ import logging
 import uvicorn
 from fastapi import FastAPI
 
+from app.clients.generic_client import aclose_shared_client
 from app.config.settings import settings
 from app.routes.api_routes import router
 
@@ -31,6 +32,12 @@ app = FastAPI(
 
 # Register all routes defined in api_routes.py
 app.include_router(router)
+
+
+@app.on_event("shutdown")
+async def _close_http_client() -> None:
+    """Release the pooled httpx client cleanly on uvicorn shutdown."""
+    await aclose_shared_client()
 
 
 if __name__ == "__main__":

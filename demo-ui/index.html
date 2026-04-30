@@ -673,10 +673,14 @@ async function run(type) {
 // Shows realistic failure progression: 3 gateway request failures build up
 // before the circuit trips — mirroring the real CIRCUIT_FAILURE_THRESHOLD=3 behaviour.
 async function openCircuit(svc, hasFallback) {
+  // CB counts REQUEST failures, not crash events.
+  // 3 incoming requests all hit the crashed service → 3 failures → circuit trips.
+  log('INFO', `Gateway: 3 client requests probe ${svc} — service is down, each returns 503`)
+  await sleep(300)
   log('WARN', `GET /${svc} → 503  CircuitBreaker: failure recorded 1/3`)
-  await sleep(350)
+  await sleep(400)
   log('WARN', `GET /${svc} → 503  CircuitBreaker: failure recorded 2/3`)
-  await sleep(350)
+  await sleep(400)
   log('WARN', `GET /${svc} → 503  CircuitBreaker: CLOSED → OPEN (failures=3/3 threshold=3)`)
   setCircuit('OPEN')
   await sleep(200)

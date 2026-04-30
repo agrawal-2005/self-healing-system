@@ -1,12 +1,15 @@
 {
-  "version": "1",
-  "description": "Phase 7 — Multi-Service Registry. Drives monitor, Lambda strategy, and recovery-agent allowlist.",
+  "version": "2",
+  "description": "Single source of truth — drives monitor, Lambda, recovery-agent, and api-service gateway.",
   "services": [
     {
       "service_name": "core-service",
       "health_url": "http://localhost:8001/health",
+      "gateway_url": "http://core-service:8001",
+      "gateway_endpoint": "/work",
       "container_name": "core-service",
-      "strategy": "restart",
+      "strategy": "fallback",
+      "timeout": 2.0,
       "fallback_service": "fallback-service",
       "critical": false,
       "description": "Primary business logic service"
@@ -14,8 +17,11 @@
     {
       "service_name": "payment-service",
       "health_url": "http://localhost:8010/health",
+      "gateway_url": "http://payment-service:8010",
+      "gateway_endpoint": "/process-payment",
       "container_name": "payment-service",
       "strategy": "escalate",
+      "timeout": 2.0,
       "fallback_service": null,
       "critical": true,
       "description": "Critical payment processor — no fallback, operator intervention required"
@@ -23,11 +29,14 @@
     {
       "service_name": "movie-service",
       "health_url": "http://localhost:8020/health",
+      "gateway_url": "http://movie-service:8020",
+      "gateway_endpoint": "/catalog",
       "container_name": "movie-service",
       "strategy": "fallback",
+      "timeout": 2.0,
       "fallback_service": "fallback-service",
       "critical": false,
-      "description": "Movie catalog service — falls back to existing fallback-service on failure"
+      "description": "Movie catalog service — falls back to fallback-service on failure"
     }
   ]
 }

@@ -1,6 +1,6 @@
 # Self-Healing Distributed System
 
-> A production-grade distributed system that detects service failures, makes intelligent severity-aware recovery decisions through AWS Lambda, and restores full health — without human intervention. Phase 7 extends this to a **multi-service platform** where each service carries its own recovery strategy, defined in a central registry.
+> A production-grade distributed system that detects service failures, makes intelligent severity-aware recovery decisions through AWS Lambda, and restores full health — without human intervention. Built around a **config-driven gateway** — adding a new service requires only a single JSON entry in `services_config.json`. No code changes, no redeployment of the system itself.
 
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?style=flat-square&logo=fastapi&logoColor=white)
@@ -19,28 +19,32 @@
 
 | Service | URL | Description |
 |---|---|---|
-| **api-service** | `http://54.224.134.71:8000/process` | Primary entry point |
-| **api-service health** | `http://54.224.134.71:8000/health` | Health check |
-| **core-service health** | `http://54.224.134.71:8001/health` | Primary service (strategy: restart) |
-| **fallback-service health** | `http://54.224.134.71:8002/health` | Shared fallback service |
-| **payment-service health** | `http://54.224.134.71:8010/health` | Critical service (strategy: escalate) |
-| **movie-service health** | `http://54.224.134.71:8020/health` | Catalog service (strategy: fallback) |
+| **gateway — core-service** | `http://54.224.134.71:8000/core-service` | Routes to core-service (strategy: fallback) |
+| **gateway — payment-service** | `http://54.224.134.71:8000/payment-service` | Routes to payment-service (strategy: escalate) |
+| **gateway — movie-service** | `http://54.224.134.71:8000/movie-service` | Routes to movie-service (strategy: fallback) |
+| **api-service health** | `http://54.224.134.71:8000/health` | Gateway health check |
+| **fallback-service health** | `http://54.224.134.71:8002/health` | Shared fallback backend |
+| **recovery-agent health** | `http://54.224.134.71:8003/health` | Recovery executor |
 
 ```bash
-# Normal response
-curl http://54.224.134.71:8000/process
+# Normal responses (via generic gateway)
+curl http://54.224.134.71:8000/core-service
+curl http://54.224.134.71:8000/payment-service
+curl http://54.224.134.71:8000/movie-service
 
 # Trigger core-service crash → watch auto-recovery (restart strategy)
 curl -X POST http://54.224.134.71:8001/fail
-curl http://54.224.134.71:8000/process    # degraded=true (fallback active)
+curl http://54.224.134.71:8000/core-service   # degraded=true (fallback active)
 sleep 30
-curl http://54.224.134.71:8000/process    # degraded=false (auto-recovered)
+curl http://54.224.134.71:8000/core-service   # degraded=false (auto-recovered)
 
 # Trigger payment-service crash → Lambda forces severity=HIGH (escalate strategy)
 curl -X POST http://54.224.134.71:8010/fail
+curl http://54.224.134.71:8000/payment-service  # HTTP 503 — no fallback
 
-# Trigger movie-service crash → Lambda routes to fallback-service (fallback strategy)
+# Trigger movie-service crash → Lambda routes to fallback-service
 curl -X POST http://54.224.134.71:8020/fail
+curl http://54.224.134.71:8000/movie-service    # degraded=true (fallback active)
 ```
 
 > **Note:** The EC2 instance may be stopped to avoid AWS costs. If the above URLs are unreachable, refer to the [Setup Instructions](#setup-instructions) to run locally.
@@ -140,6 +144,7 @@ This project was built incrementally across 7 phases, each adding a production-g
 | **Phase 5** | Production hardening — circuit breaker, CloudWatch metrics, SQS DLQ, event cooldown, EC2 deployment |
 | **Phase 6** | Advanced self-healing — SmartRecoveryPolicy, IncidentSeverity, escalation logic, RollbackManager, new CloudWatch widgets |
 | **Phase 7** | Multi-service platform — `services_config.json` registry, per-service strategies (restart/escalate/fallback), payment-service and movie-service added as real-world examples, 20-widget dashboard |
+| **Phase 8** | Config-driven gateway — api-service becomes a true generic proxy (`GET /{service_name}`). One `GenericServiceClient`, one `ServiceRegistry`, one `call()` method. Adding a new service = 1 JSON line, zero code changes. Monitor health checks parallelised with `asyncio.gather()` — cycle time = slowest single check, not sum. |
 
 ---
 
@@ -176,8 +181,8 @@ This project was built incrementally across 7 phases, each adding a production-g
 |---|---|
 | **Services** | Python 3.12, FastAPI, uvicorn |
 | **Packaging** | Docker, Docker Compose |
-| **Health Monitor** | Python (requests, boto3) — reads services_config.json dynamically |
-| **Service Registry** | `services_config.json` — drives monitor, Lambda, and recovery-agent |
+| **Health Monitor** | Python (httpx async, boto3) — parallel health checks via `asyncio.gather()` |
+| **Service Registry** | `services_config.json` — single source of truth for monitor, gateway, Lambda, and recovery-agent |
 | **Event Bus** | AWS EventBridge |
 | **Serverless Recovery** | AWS Lambda (Python 3.12) |
 | **Decision Engine** | SmartRecoveryPolicy + strategy-aware overrides (Phase 7) |
@@ -195,7 +200,9 @@ This project was built incrementally across 7 phases, each adding a production-g
 ### Normal Operation
 
 ```
-Client ──► api-service ──► core-service ──► { "source": "core-service", "degraded": false }
+Client ──► GET /core-service ──► api-service gateway ──► core-service ──► { "source": "core-service", "degraded": false }
+Client ──► GET /movie-service ──► api-service gateway ──► movie-service ──► { "source": "movie-service", "degraded": false }
+Client ──► GET /payment-service ──► api-service gateway ──► payment-service ──► { "source": "payment-service", "degraded": false }
 ```
 
 ### Failure → Auto-Recovery (8 steps)
@@ -380,12 +387,19 @@ The recommendation is logged and emitted as a CloudWatch metric but not executed
 
 ## API Reference
 
-### api-service — Port 8000 (Public Gateway)
+### api-service — Port 8000 (Config-Driven Gateway)
 
 | Method | Endpoint | Description | Response |
 |---|---|---|---|
-| `GET` | `/health` | Service health check | `{"status": "healthy", "service": "api-service"}` |
-| `GET` | `/process` | Main entry point — calls core-service, falls back to fallback-service on failure | `{"source": "core-service", "degraded": false}` |
+| `GET` | `/health` | Gateway health check | `{"status": "healthy", "service": "api-service"}` |
+| `GET` | `/{service_name}` | Route to any registered service. Strategy (fallback/escalate) applied automatically from config. Returns 404 for unknown names. | `{"source": "...", "result": {...}, "degraded": false}` |
+
+**Example calls:**
+```bash
+curl http://localhost:8000/core-service       # strategy: fallback
+curl http://localhost:8000/payment-service    # strategy: escalate — 503 when circuit OPEN
+curl http://localhost:8000/movie-service      # strategy: fallback
+```
 
 ### core-service — Port 8001 (Primary Worker)
 
@@ -473,91 +487,70 @@ The recommendation is logged and emitted as a CloudWatch metric but not executed
 ```
 self-healing-system/
 │
-├── services_config.json               # Phase 7: single source of truth for all services
-│                                      # drives monitor URL list, Lambda strategy, agent allowlist
+├── services_config.json        # Single source of truth — drives everything
+│                               # monitor URLs · gateway routing · Lambda strategy · recovery allowlist
 │
-├── api-service/                       # Entry point for client traffic (:8000)
+│── ─── SYSTEM COMPONENTS ──────────────────────────────────────────────────
+│
+├── api-service/                # Config-driven gateway (:8000)
+│   └── app/
+│       ├── clients/
+│       │   └── generic_client.py       # One HTTP client for every service
+│       ├── services/
+│       │   ├── service_registry.py     # Loads services_config.json, creates circuit breakers
+│       │   ├── gateway_service.py      # call(service_name) — fallback or escalate
+│       │   └── circuit_breaker.py      # CLOSED/OPEN/HALF_OPEN state machine (per service)
+│       └── routes/api_routes.py        # GET /health · GET /{service_name}
+│
+├── fallback-service/           # Degraded-mode backend (:8002)
+│   └── app/routes/             # GET /fallback — always returns degraded response
+│
+├── recovery-agent/             # Docker command executor (:8003)
 │   └── app/
 │       ├── services/
-│       │   ├── api_service.py         # try core → fallback logic
-│       │   └── circuit_breaker.py     # CLOSED/OPEN/HALF_OPEN state machine
-│       └── publishers/
-│           └── cloudwatch_publisher.py
+│       │   ├── recovery_service.py     # restart / stop / start
+│       │   └── recovery_history.py     # append-only JSONL audit log
+│       └── routes/recovery_routes.py  # POST /action (token-authenticated)
 │
-├── core-service/                      # Primary business logic (:8001) — strategy: restart
-│   └── app/
-│       ├── routes/core_routes.py      # GET /work, POST /fail, GET /health
-│       └── services/state_manager.py  # crashed/healthy state
-│
-├── fallback-service/                  # Degraded-mode backup (:8002) — shared fallback
-│
-├── payment-service/                   # Phase 7 example (:8010) — strategy: escalate
-│   └── app/
-│       ├── routes/routes.py           # GET /process-payment, POST /fail, GET /health
-│       └── services/
-│           ├── payment_service.py     # payment processing logic
-│           └── state_manager.py       # crashed/healthy state
-│
-├── movie-service/                     # Phase 7 example (:8020) — strategy: fallback
-│   └── app/
-│       ├── routes/routes.py           # GET /catalog, POST /fail, GET /health
-│       └── services/
-│           ├── movie_service.py       # catalog logic (5 movies)
-│           └── state_manager.py       # crashed/healthy state
-│
-├── recovery-agent/                    # Executes Docker commands (:8003)
-│   └── app/
-│       ├── services/
-│       │   ├── recovery_service.py    # restart / stop / start logic
-│       │   └── recovery_history.py    # append-only JSONL audit log
-│       ├── models/schemas.py          # ActionRequest with Phase 6/7 fields
-│       └── publishers/
-│           └── cloudwatch_publisher.py
-│
-├── monitor/                           # Health + latency monitor
-│   ├── monitor.py                     # Phase 7: loads services_config.json dynamically
+├── monitor/                    # Async parallel health watcher (runs on EC2, not Docker)
+│   ├── monitor.py              # asyncio.run(monitor.run_async()) entry point
 │   └── app/
 │       ├── checkers/
-│       │   ├── health_checker.py      # HTTP /health polling every 5s
-│       │   └── latency_checker.py     # SLOW / VERY_SLOW classification
-│       ├── config/settings.py         # services_config_path + feature flags
-│       ├── publishers/
-│       │   ├── eventbridge_publisher.py
-│       │   └── cloudwatch_publisher.py
+│       │   ├── health_checker.py       # check_async() via httpx — parallel via gather()
+│       │   └── latency_checker.py      # SLOW / VERY_SLOW classification
 │       └── services/
-│           ├── monitor_service.py     # Main loop + cooldown logic
-│           └── event_cooldown.py      # 60s deduplication window
+│           ├── monitor_service.py      # run_check_cycle_async() — all checks fire at once
+│           └── event_cooldown.py       # 60s deduplication window
 │
 ├── aws/
 │   ├── lambda/
-│   │   ├── recovery_handler.py        # Phase 7: strategy-aware, loads service registry
-│   │   ├── smart_recovery_policy.py   # IncidentSeverity + decision engine
-│   │   ├── rollback_manager.py        # Dry-run rollback recommendations
-│   │   └── tests/
-│   │       ├── conftest.py
-│   │       ├── test_smart_recovery_policy.py  # 18 unit tests
-│   │       └── test_rollback_manager.py       # 15 unit tests
+│   │   ├── recovery_handler.py         # Strategy-aware, reads services_config.json
+│   │   ├── smart_recovery_policy.py    # LOW/MEDIUM/HIGH/CRITICAL decision engine
+│   │   ├── rollback_manager.py         # Dry-run rollback recommendations
+│   │   └── tests/                      # 33 unit tests
 │   ├── cloudwatch/
-│   │   ├── dashboard.json             # 20-widget CloudWatch dashboard (Phase 7)
+│   │   ├── dashboard.json              # 20-widget dashboard
 │   │   └── create_dashboard.sh
 │   └── setup/
 │       ├── eventbridge_rule.json
 │       └── iam_policy.json
 │
-├── tests/
-│   └── scripts/
-│       ├── critical_core_failure_recovery.sh  # End-to-end chaos test
-│       └── verify_cloudwatch_metrics.sh
+│── ─── DEMO SERVICES (examples of services that plug into the system) ──────
 │
-├── docker-compose.yml                 # All 6 services: api, core, fallback, agent, payment, movie
-├── .env.example
+├── demo-services/
+│   ├── core-service/           # Demo: strategy=fallback (:8001)  GET /work
+│   ├── payment-service/        # Demo: strategy=escalate (:8010)  GET /process-payment
+│   └── movie-service/          # Demo: strategy=fallback (:8020)  GET /catalog
+│
+│── ─── OTHER ──────────────────────────────────────────────────────────────
+│
+├── demo-ui/index.html          # Single-file interactive demo (simulation)
+├── docker-compose.yml
+├── tests/scripts/
 └── docs/
-    ├── screenshots/
-    │   ├── dashboard-overview.png
-    │   ├── recovery-pipeline.png
-    │   └── incident-intelligence.png
-    └── phase5-ec2-deployment.md
 ```
+
+> **Adding a new service:** add one JSON block to `services_config.json`. The gateway, monitor, Lambda, and recovery-agent all pick it up automatically — no code changes anywhere.
 
 ---
 

@@ -5,15 +5,17 @@ Single responsibility:
   Given a service name and base URL, call /health, measure the latency,
   and return a HealthCheckResult.  It does NOT decide what to do with the result.
 
-Why separate from MonitorService?
-  - You can swap this with a TCP checker, gRPC checker, etc.
-  - Easy to unit-test in isolation with a fake HTTP server.
+Two interfaces:
+  check()       — synchronous (kept for backward-compat with tests)
+  check_async() — async via httpx; used by MonitorService for parallel checks
 """
 
+import asyncio
 import logging
 import time
 from datetime import datetime, timezone
 
+import httpx
 import requests
 
 from app.models.schemas import HealthCheckResult, ServiceStatus
@@ -25,23 +27,25 @@ class HealthChecker:
     def __init__(self, timeout_seconds: float = 3.0) -> None:
         self.timeout = timeout_seconds
 
-    def check(self, service_name: str, base_url: str) -> HealthCheckResult:
-        """
-        GET {base_url}/health, measure latency, return HealthCheckResult.
+    # ── async (parallel-capable) ──────────────────────────────────────────────
 
-        Never raises — all exceptions are caught and returned as a DOWN/TIMEOUT result
-        so the monitor loop never dies because one service is unreachable.
+    async def check_async(self, service_name: str, base_url: str) -> HealthCheckResult:
         """
-        url = f"{base_url}/health"
+        Async version — call with asyncio.gather() to check all services at once.
+
+        Total check-cycle time = slowest single check (not sum of all checks).
+        Never raises — all exceptions are caught and returned as DOWN/TIMEOUT.
+        """
+        url       = f"{base_url}/health"
         timestamp = datetime.now(timezone.utc).isoformat()
-        start = time.monotonic()
+        start     = time.monotonic()
 
         try:
-            resp = requests.get(url, timeout=self.timeout)
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                resp = await client.get(url)
             latency_ms = (time.monotonic() - start) * 1000
 
             if resp.status_code == 200:
-                # Status is UP for now; LatencyChecker will downgrade to SLOW if needed.
                 status = ServiceStatus.UP
             else:
                 status = ServiceStatus.DOWN
@@ -51,46 +55,52 @@ class HealthChecker:
                 )
 
             return HealthCheckResult(
-                service_name=service_name,
-                url=url,
-                status=status,
-                latency_ms=round(latency_ms, 1),
-                timestamp=timestamp,
-                http_status_code=resp.status_code,
+                service_name     = service_name,
+                url              = url,
+                status           = status,
+                latency_ms       = round(latency_ms, 1),
+                timestamp        = timestamp,
+                http_status_code = resp.status_code,
             )
 
-        except requests.exceptions.Timeout:
+        except httpx.TimeoutException:
             latency_ms = self.timeout * 1000
             logger.error("HealthChecker [%s]: TIMEOUT (>%.0fms)", service_name, latency_ms)
             return HealthCheckResult(
-                service_name=service_name,
-                url=url,
-                status=ServiceStatus.TIMEOUT,
-                latency_ms=round(latency_ms, 1),
-                timestamp=timestamp,
-                error="Request timed out",
+                service_name = service_name,
+                url          = url,
+                status       = ServiceStatus.TIMEOUT,
+                latency_ms   = round(latency_ms, 1),
+                timestamp    = timestamp,
+                error        = "Request timed out",
             )
 
-        except requests.exceptions.ConnectionError as exc:
+        except httpx.RequestError as exc:
             latency_ms = (time.monotonic() - start) * 1000
             logger.error("HealthChecker [%s]: DOWN — %s", service_name, exc)
             return HealthCheckResult(
-                service_name=service_name,
-                url=url,
-                status=ServiceStatus.DOWN,
-                latency_ms=round(latency_ms, 1),
-                timestamp=timestamp,
-                error=str(exc),
+                service_name = service_name,
+                url          = url,
+                status       = ServiceStatus.DOWN,
+                latency_ms   = round(latency_ms, 1),
+                timestamp    = timestamp,
+                error        = str(exc),
             )
 
         except Exception as exc:
             latency_ms = (time.monotonic() - start) * 1000
             logger.exception("HealthChecker [%s]: unexpected error — %s", service_name, exc)
             return HealthCheckResult(
-                service_name=service_name,
-                url=url,
-                status=ServiceStatus.DOWN,
-                latency_ms=round(latency_ms, 1),
-                timestamp=timestamp,
-                error=str(exc),
+                service_name = service_name,
+                url          = url,
+                status       = ServiceStatus.DOWN,
+                latency_ms   = round(latency_ms, 1),
+                timestamp    = timestamp,
+                error        = str(exc),
             )
+
+    # ── sync (kept for tests / backward compat) ───────────────────────────────
+
+    def check(self, service_name: str, base_url: str) -> HealthCheckResult:
+        """Synchronous wrapper around check_async — used in unit tests."""
+        return asyncio.run(self.check_async(service_name, base_url))

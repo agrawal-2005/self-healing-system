@@ -1,39 +1,28 @@
 """
 Dependency injection wiring for api-service.
 
-FastAPI's Depends() system calls these functions to produce the objects
-that route handlers need. By centralising construction here:
-  - All wiring is in one file.
-  - Swapping Settings or clients (e.g. for testing) means changing one place.
-  - Route handlers stay unaware of how objects are created.
+All construction is here so route handlers stay unaware of how objects are built.
+Singletons are created once at import time.
 
-The singletons are created once at import time.
+Phase 8 (config-driven gateway):
+  - ServiceRegistry reads services_config.json and creates one CircuitBreaker per service.
+  - GatewayService replaces ApiService — it is generic and works for any registered service.
+  - Adding a new downstream service requires only a services_config.json change; no code here.
 """
 
-from app.clients.core_client import CoreClient
-from app.clients.fallback_client import FallbackClient
 from app.config.settings import settings
 from app.publishers.cloudwatch_publisher import CloudWatchMetricsPublisher
-from app.services.api_service import ApiService
-from app.services.circuit_breaker import CircuitBreaker
+from app.services.gateway_service import GatewayService
+from app.services.service_registry import ServiceRegistry
 
 # ── Singletons ────────────────────────────────────────────────────────────────
-# Created once when the module is first imported.
 
-_core_client = CoreClient(
-    base_url=settings.core_service_url,
-    timeout=settings.request_timeout,
-)
-
-_fallback_client = FallbackClient(
-    base_url=settings.fallback_service_url,
-    timeout=settings.request_timeout,
-)
-
-circuit_breaker = CircuitBreaker(
-    failure_threshold=settings.circuit_failure_threshold,
-    recovery_timeout_seconds=settings.circuit_recovery_timeout_seconds,
-    half_open_max_calls=settings.circuit_half_open_max_calls,
+_registry = ServiceRegistry.from_config_file(
+    path                        = settings.services_config_path,
+    cb_failure_threshold        = settings.circuit_failure_threshold,
+    cb_recovery_timeout_seconds = settings.circuit_recovery_timeout_seconds,
+    cb_half_open_max_calls      = settings.circuit_half_open_max_calls,
+    default_timeout             = settings.request_timeout,
 )
 
 _cloudwatch_publisher = CloudWatchMetricsPublisher(
@@ -42,17 +31,17 @@ _cloudwatch_publisher = CloudWatchMetricsPublisher(
     enabled   = settings.cloudwatch_enabled,
 )
 
-_api_service = ApiService(
-    core_client          = _core_client,
-    fallback_client      = _fallback_client,
+_gateway = GatewayService(
+    registry             = _registry,
+    fallback_url         = f"{settings.fallback_service_url}/fallback",
+    fallback_timeout     = settings.request_timeout,
     service_name         = settings.service_name,
-    circuit_breaker      = circuit_breaker,
     cloudwatch_publisher = _cloudwatch_publisher,
 )
 
 
 # ── Provider functions (used with FastAPI Depends) ────────────────────────────
 
-def get_api_service() -> ApiService:
-    """Returns the shared ApiService instance."""
-    return _api_service
+def get_gateway_service() -> GatewayService:
+    """Returns the shared GatewayService instance."""
+    return _gateway

@@ -25,8 +25,8 @@ logging.basicConfig(
 
 app = FastAPI(
     title="API Service",
-    description="Gateway: routes requests to core-service, auto-falls back to fallback-service.",
-    version="1.0.0",
+    description="Config-driven gateway: routes GET /{service_name} to any registered downstream service with per-service circuit breakers and fallback/escalate strategies.",
+    version="2.0.0",
 )
 
 # Register all routes defined in api_routes.py

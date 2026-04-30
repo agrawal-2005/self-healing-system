@@ -1,18 +1,12 @@
 """
 Pydantic models for api-service.
 
-These define the shape of data that flows:
-  - INTO this service (request bodies, if any)
-  - OUT OF this service (response bodies)
-  - BETWEEN this service and downstream services (parsed from JSON responses)
-
-Keeping models in one place makes it easy to change the API contract later.
+Kept intentionally minimal — the gateway passes downstream responses through
+as raw dicts, so there is no need for per-service response models.
 """
 
 from pydantic import BaseModel
 
-
-# ── Responses api-service sends to callers ────────────────────────────────────
 
 class HealthResponse(BaseModel):
     """Returned by GET /health."""
@@ -22,39 +16,17 @@ class HealthResponse(BaseModel):
 
 class ProcessResponse(BaseModel):
     """
-    Returned by GET /process.
+    Returned by GET /{service_name}.
 
-    `source`  — which service actually produced the result.
-    `result`  — the raw payload returned by that service.
-    `degraded`— True when the result came from the fallback, not core.
+    source   — which service produced the result ("core-service", "fallback-service", …)
+    result   — raw JSON payload from that service
+    degraded — True when the response came from fallback-service, not the primary
     """
-    source: str
-    result: dict
+    source:   str
+    result:   dict
     degraded: bool = False
 
 
 class ErrorResponse(BaseModel):
-    """Returned when both core and fallback are unavailable."""
-    error: str
+    """Returned on HTTP 503 / 404."""
     detail: str
-
-
-# ── Shapes api-service expects FROM downstream services ───────────────────────
-
-class WorkResult(BaseModel):
-    """
-    Shape of the JSON body returned by core-service GET /work.
-    Used inside CoreClient to parse and validate the response.
-    """
-    message: str
-    service: str
-
-
-class FallbackResult(BaseModel):
-    """
-    Shape of the JSON body returned by fallback-service GET /fallback.
-    Used inside FallbackClient to parse and validate the response.
-    """
-    message: str
-    service: str
-    degraded: bool

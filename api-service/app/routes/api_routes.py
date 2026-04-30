@@ -1,21 +1,19 @@
 """
-Route layer for api-service.
+Route layer for api-service — Phase 8 (config-driven gateway).
 
-Rules for this file:
-  - Each handler must be ≤ 5 lines of real logic.
-  - No business logic here — only call service methods and return results.
-  - No direct use of httpx, clients, or settings.
+Two routes only:
+  GET /health            — liveness probe, always returns 200 while process is up
+  GET /{service_name}    — generic proxy to any registered downstream service
 
-Why so thin?
-  Routes are the HTTP boundary. Keeping them thin means the business logic
-  (in ApiService) can be tested without a running HTTP server.
+Adding a new downstream service does NOT require a new route here.
+It requires only a new entry in services_config.json.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.dependencies import get_api_service
+from app.dependencies import get_gateway_service
 from app.models.schemas import ErrorResponse, HealthResponse, ProcessResponse
-from app.services.api_service import ApiService
+from app.services.gateway_service import GatewayService
 
 router = APIRouter()
 
@@ -25,26 +23,38 @@ router = APIRouter()
     response_model=HealthResponse,
     summary="Health check",
 )
-async def health(service: ApiService = Depends(get_api_service)):
-    """Returns 200 if api-service is running."""
-    return service.health()
+async def health(gateway: GatewayService = Depends(get_gateway_service)):
+    """Returns 200 if api-service itself is running."""
+    return gateway.health()
 
 
 @router.get(
-    "/process",
+    "/{service_name}",
     response_model=ProcessResponse,
-    responses={503: {"model": ErrorResponse}},
-    summary="Process a request (with automatic fallback)",
+    responses={
+        404: {"model": ErrorResponse},
+        503: {"model": ErrorResponse},
+    },
+    summary="Proxy a request to any registered downstream service",
 )
-async def process(service: ApiService = Depends(get_api_service)):
+async def proxy(
+    service_name: str,
+    gateway: GatewayService = Depends(get_gateway_service),
+):
     """
-    Calls core-service. Falls back to fallback-service automatically.
-    Returns 503 only when BOTH downstream services are unreachable.
+    Routes the request to the named service via its circuit breaker.
+
+    Strategy is configured per service in services_config.json:
+      fallback  — on failure, returns a degraded response from fallback-service
+      escalate  — on failure, returns HTTP 503 immediately (no fallback)
+
+    Returns 404 if service_name is not registered in the gateway.
+    Returns 503 if the service is unavailable and strategy=escalate,
+              or if both the primary and fallback-service are unreachable.
     """
     try:
-        return await service.process()
+        return await gateway.call(service_name)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Both core-service and fallback-service are unavailable: {exc}",
-        )
+        raise HTTPException(status_code=503, detail=str(exc))

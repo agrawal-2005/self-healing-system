@@ -1,0 +1,921 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Self-Healing Distributed System — Demo</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --surface2: #1c2128;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --green: #3fb950;
+  --red: #f85149;
+  --yellow: #d29922;
+  --blue: #58a6ff;
+  --purple: #bc8cff;
+  --orange: #ffa657;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  height: 100vh;
+  overflow: hidden;
+  font-size: 13px;
+}
+
+/* HEADER */
+.header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 48px;
+}
+.header-left { display: flex; align-items: center; gap: 10px; }
+.header h1 { font-size: 15px; font-weight: 600; }
+.header-sub { font-size: 11px; color: var(--muted); }
+
+.live-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(63,185,80,0.1);
+  border: 1px solid rgba(63,185,80,0.3);
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  color: var(--green);
+}
+.live-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  animation: blink 2s infinite;
+}
+
+/* MAIN GRID */
+.main {
+  display: grid;
+  grid-template-columns: 250px 1fr 290px;
+  gap: 10px;
+  padding: 10px;
+  height: calc(100vh - 48px);
+}
+
+/* PANEL TITLE */
+.panel-title {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-bottom: 8px;
+}
+
+/* SERVICE CARDS */
+.services-col { display: flex; flex-direction: column; gap: 0; overflow-y: auto; }
+
+.service-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: none;
+  padding: 10px 12px;
+  position: relative;
+  transition: all 0.3s;
+}
+.service-card:first-of-type { border-top: 1px solid var(--border); border-radius: 8px 8px 0 0; }
+.service-card:last-of-type { border-radius: 0 0 8px 8px; }
+
+.service-card::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: var(--green);
+  transition: background 0.3s;
+}
+.service-card.crashed::before { background: var(--red); }
+.service-card.degraded::before { background: var(--yellow); }
+.service-card.inactive::before { background: var(--muted); }
+
+.svc-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.svc-name { font-size: 12px; font-weight: 600; }
+
+.badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 10px;
+  letter-spacing: 0.3px;
+}
+.badge.up { background: rgba(63,185,80,0.15); color: var(--green); }
+.badge.down { background: rgba(248,81,73,0.15); color: var(--red); }
+.badge.degraded { background: rgba(210,153,34,0.15); color: var(--yellow); }
+.badge.standby { background: rgba(139,148,158,0.15); color: var(--muted); }
+
+.svc-tags { display: flex; gap: 4px; flex-wrap: wrap; }
+.tag {
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.tag.escalate { border-color: rgba(248,81,73,0.5); color: var(--red); }
+.tag.fallback-t { border-color: rgba(88,166,255,0.5); color: var(--blue); }
+.tag.restart-t { border-color: rgba(63,185,80,0.5); color: var(--green); }
+.tag.sev-LOW { border-color: rgba(63,185,80,0.4); color: var(--green); }
+.tag.sev-MEDIUM { border-color: rgba(210,153,34,0.4); color: var(--yellow); }
+.tag.sev-HIGH { border-color: rgba(255,166,87,0.5); color: var(--orange); }
+.tag.sev-CRITICAL { border-color: rgba(248,81,73,0.5); color: var(--red); background: rgba(248,81,73,0.08); }
+
+.svc-latency { font-size: 10px; color: var(--muted); margin-top: 5px; }
+
+/* CENTER */
+.center-col { display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
+
+/* STATS BAR */
+.stats-bar {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-shrink: 0;
+}
+.stat { text-align: center; }
+.stat .val { font-size: 20px; font-weight: 700; line-height: 1; }
+.stat .lbl { font-size: 9px; color: var(--muted); margin-top: 3px; text-transform: uppercase; }
+.divider { width: 1px; height: 32px; background: var(--border); }
+
+/* PIPELINE */
+.pipeline-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  flex-shrink: 0;
+}
+.pipeline-flow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+}
+.p-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  min-width: 72px;
+  padding: 8px 6px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  transition: all 0.4s;
+  cursor: default;
+}
+.p-node.active {
+  border-color: var(--blue);
+  background: rgba(88,166,255,0.08);
+  box-shadow: 0 0 16px rgba(88,166,255,0.15);
+  transform: translateY(-1px);
+}
+.p-node.done {
+  border-color: var(--green);
+  background: rgba(63,185,80,0.07);
+}
+.p-node.warn {
+  border-color: var(--orange);
+  background: rgba(255,166,87,0.07);
+}
+.p-icon { font-size: 16px; }
+.p-label { font-size: 10px; font-weight: 600; color: var(--text); }
+.p-sub { font-size: 9px; color: var(--muted); }
+
+.p-arrow { color: var(--border); font-size: 14px; flex-shrink: 0; transition: color 0.3s; }
+.p-arrow.active { color: var(--blue); }
+.p-arrow.done { color: var(--green); }
+
+/* SCENARIO PANEL */
+.scenario-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  flex: 1;
+  overflow-y: auto;
+}
+.scenario-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+.s-btn {
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s;
+  line-height: 1.4;
+}
+.s-btn:hover:not(:disabled) { border-color: var(--blue); background: rgba(88,166,255,0.05); }
+.s-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.s-btn .s-title { font-weight: 700; font-size: 12px; margin-bottom: 3px; }
+.s-btn .s-desc { font-size: 10px; color: var(--muted); }
+.s-btn.red { border-color: rgba(248,81,73,0.35); }
+.s-btn.red:hover:not(:disabled) { border-color: var(--red); background: rgba(248,81,73,0.05); }
+.s-btn.yellow { border-color: rgba(210,153,34,0.35); }
+.s-btn.yellow:hover:not(:disabled) { border-color: var(--yellow); background: rgba(210,153,34,0.05); }
+.s-btn.full { grid-column: span 2; }
+
+/* LOG PANEL */
+.log-col {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.log-list {
+  flex: 1;
+  overflow-y: auto;
+  margin-top: 8px;
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+.log-entry {
+  padding: 2px 0;
+  border-bottom: 1px solid rgba(48,54,61,0.4);
+  animation: slideIn 0.2s ease;
+  word-break: break-word;
+}
+.l-time { color: #484f58; }
+.l-ok { color: var(--green); font-weight: 700; }
+.l-info { color: var(--blue); font-weight: 700; }
+.l-warn { color: var(--yellow); font-weight: 700; }
+.l-err { color: var(--red); font-weight: 700; }
+.l-msg { color: var(--text); }
+
+/* ANIMATIONS */
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+@keyframes slideIn { from{opacity:0;transform:translateX(6px)} to{opacity:1;transform:translateX(0)} }
+@keyframes crashPulse {
+  0%,100%{box-shadow:0 0 0 0 rgba(248,81,73,0)}
+  50%{box-shadow:0 0 0 4px rgba(248,81,73,0.2)}
+}
+.service-card.crashed { animation: crashPulse 1.5s infinite; }
+
+/* SCROLLBAR */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <div class="header-left">
+    <span style="font-size:18px">🔧</span>
+    <div>
+      <h1>Self-Healing Distributed System</h1>
+      <div class="header-sub">AWS Lambda · EventBridge · EC2 · CloudWatch · Docker · Config-Driven Gateway</div>
+    </div>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center">
+    <div class="live-indicator">
+      <div class="live-dot"></div>
+      SIMULATION MODE
+    </div>
+    <div style="font-size:11px;color:var(--muted)">Built by Prashanta</div>
+  </div>
+</div>
+
+<!-- MAIN -->
+<div class="main">
+
+  <!-- LEFT: SERVICES -->
+  <div class="services-col">
+    <div class="panel-title">Services</div>
+
+    <div class="service-card" id="card-core">
+      <div class="svc-row">
+        <span class="svc-name">core-service :8001</span>
+        <span class="badge up" id="status-core">UP</span>
+      </div>
+      <div class="svc-tags">
+        <span class="tag restart-t">restart</span>
+        <span class="tag sev-LOW" id="sev-core">LOW</span>
+        <span class="tag" id="cnt-core" style="display:none">fails: 0</span>
+      </div>
+      <div class="svc-latency" id="lat-core">latency: 3ms</div>
+    </div>
+
+    <div class="service-card" id="card-payment">
+      <div class="svc-row">
+        <span class="svc-name">payment-service :8010</span>
+        <span class="badge up" id="status-payment">UP</span>
+      </div>
+      <div class="svc-tags">
+        <span class="tag escalate">escalate ⚠</span>
+        <span class="tag sev-LOW" id="sev-payment">LOW</span>
+      </div>
+      <div class="svc-latency" id="lat-payment">latency: 2ms · critical=true</div>
+    </div>
+
+    <div class="service-card" id="card-movie">
+      <div class="svc-row">
+        <span class="svc-name">movie-service :8020</span>
+        <span class="badge up" id="status-movie">UP</span>
+      </div>
+      <div class="svc-tags">
+        <span class="tag fallback-t">fallback</span>
+        <span class="tag sev-LOW" id="sev-movie">LOW</span>
+      </div>
+      <div class="svc-latency" id="lat-movie">latency: 3ms</div>
+    </div>
+
+    <div class="service-card" id="card-fallback">
+      <div class="svc-row">
+        <span class="svc-name">fallback-service :8002</span>
+        <span class="badge standby" id="status-fallback">STANDBY</span>
+      </div>
+      <div class="svc-tags">
+        <span class="tag" style="border-color:rgba(139,148,158,0.4)">always-on</span>
+        <span class="tag" style="border-color:rgba(139,148,158,0.4)">degraded-mode</span>
+      </div>
+      <div class="svc-latency" id="lat-fallback">waiting for traffic</div>
+    </div>
+
+    <div class="service-card" id="card-agent">
+      <div class="svc-row">
+        <span class="svc-name">recovery-agent :8003</span>
+        <span class="badge up">UP</span>
+      </div>
+      <div class="svc-tags">
+        <span class="tag" style="border-color:rgba(188,140,255,0.4);color:var(--purple)">executor</span>
+        <span class="tag" style="border-color:rgba(188,140,255,0.4);color:var(--purple)">docker-access</span>
+      </div>
+      <div class="svc-latency">X-Recovery-Token auth</div>
+    </div>
+
+    <div class="service-card" id="card-monitor" style="margin-top:0">
+      <div class="svc-row">
+        <span class="svc-name">monitor (daemon)</span>
+        <span class="badge up" id="monitor-status">ACTIVE</span>
+      </div>
+      <div class="svc-tags">
+        <span class="tag" style="border-color:rgba(88,166,255,0.4);color:var(--blue)">5s interval</span>
+        <span class="tag" style="border-color:rgba(88,166,255,0.4);color:var(--blue)">async·parallel</span>
+        <span class="tag" style="border-color:rgba(88,166,255,0.4);color:var(--blue)">5 services</span>
+      </div>
+      <div class="svc-latency" id="poll-count">polls: 0</div>
+    </div>
+  </div>
+
+  <!-- CENTER -->
+  <div class="center-col">
+
+    <!-- STATS -->
+    <div class="stats-bar">
+      <div class="stat">
+        <div class="val" id="stat-recoveries" style="color:var(--green)">0</div>
+        <div class="lbl">Recoveries</div>
+      </div>
+      <div class="divider"></div>
+      <div class="stat">
+        <div class="val" id="stat-mttr" style="color:var(--blue)">--</div>
+        <div class="lbl">Last MTTR</div>
+      </div>
+      <div class="divider"></div>
+      <div class="stat">
+        <div class="val" id="stat-sev" style="color:var(--muted)">--</div>
+        <div class="lbl">Last Severity</div>
+      </div>
+      <div class="divider"></div>
+      <div class="stat">
+        <div class="val" id="stat-ckt" style="color:var(--green)">CLOSED</div>
+        <div class="lbl">Circuit (per-svc)</div>
+      </div>
+      <div class="divider"></div>
+      <div class="stat">
+        <div class="val" id="stat-lambda" style="color:var(--muted)">0</div>
+        <div class="lbl">Lambda Invocations</div>
+      </div>
+    </div>
+
+    <!-- PIPELINE -->
+    <div class="pipeline-box">
+      <div class="panel-title">Recovery Pipeline — End to End Flow</div>
+      <div class="pipeline-flow">
+
+        <div class="p-node" id="node-monitor">
+          <div class="p-icon">👁</div>
+          <div class="p-label">Monitor</div>
+          <div class="p-sub" id="node-monitor-sub">async·5s</div>
+        </div>
+        <div class="p-arrow" id="arr1">──▶</div>
+
+        <div class="p-node" id="node-eb">
+          <div class="p-icon">⚡</div>
+          <div class="p-label">EventBridge</div>
+          <div class="p-sub" id="node-eb-sub">AWS rule</div>
+        </div>
+        <div class="p-arrow" id="arr2">──▶</div>
+
+        <div class="p-node" id="node-lambda">
+          <div class="p-icon">λ</div>
+          <div class="p-label">Lambda</div>
+          <div class="p-sub" id="node-lambda-sub">decision</div>
+        </div>
+        <div class="p-arrow" id="arr3">──▶</div>
+
+        <div class="p-node" id="node-agent">
+          <div class="p-icon">🤖</div>
+          <div class="p-label">Recovery Agent</div>
+          <div class="p-sub" id="node-agent-sub">executor</div>
+        </div>
+        <div class="p-arrow" id="arr4">──▶</div>
+
+        <div class="p-node" id="node-docker">
+          <div class="p-icon">🐳</div>
+          <div class="p-label">Docker</div>
+          <div class="p-sub" id="node-docker-sub">restart</div>
+        </div>
+        <div class="p-arrow" id="arr5">──▶</div>
+
+        <div class="p-node" id="node-done">
+          <div class="p-icon">✅</div>
+          <div class="p-label">Healthy</div>
+          <div class="p-sub" id="node-done-sub">recovered</div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- SCENARIOS -->
+    <div class="scenario-box">
+      <div class="panel-title">Demo Scenarios — Click to Simulate</div>
+      <div class="scenario-grid">
+
+        <button class="s-btn" id="btn-movie" onclick="run('movie')">
+          <div class="s-title">🎬 Crash Movie Service</div>
+          <div class="s-desc">strategy=fallback · LOW severity<br>restart → circuit closes → healthy</div>
+        </button>
+
+        <button class="s-btn red" id="btn-payment" onclick="run('payment')">
+          <div class="s-title">💳 Crash Payment Service</div>
+          <div class="s-desc">strategy=escalate · forced HIGH<br>critical=true · no fallback available</div>
+        </button>
+
+        <button class="s-btn yellow" id="btn-repeat" onclick="run('repeat')">
+          <div class="s-title">🔁 Repeat Crash → CRITICAL</div>
+          <div class="s-desc">5 crashes in 10min · LOW→CRITICAL<br>enable_fallback + rollback recommended</div>
+        </button>
+
+        <button class="s-btn" id="btn-slow" onclick="run('slow')">
+          <div class="s-title">🐌 Slow Response (Movie)</div>
+          <div class="s-desc">latency &gt;1000ms · any severity<br>immediately routes to fallback</div>
+        </button>
+
+        <button class="s-btn full" id="btn-reset" onclick="resetAll()">
+          <div class="s-title">↺ Reset All Services to Healthy</div>
+          <div class="s-desc">Restore all services · clear failure history · close circuit</div>
+        </button>
+
+      </div>
+    </div>
+
+  </div>
+
+  <!-- RIGHT: LOG -->
+  <div class="log-col">
+    <div class="panel-title">Live Event Log</div>
+    <div class="log-list" id="logList"></div>
+  </div>
+
+</div>
+
+<script>
+// ─────────────────────────────────────────
+// STATE
+// ─────────────────────────────────────────
+const S = {
+  running: false,
+  recoveries: 0,
+  lambdaCount: 0,
+  pollCount: 0,
+  failHistory: { core: [], movie: [], payment: [] }
+}
+
+// ─────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────
+const sleep = ms => new Promise(r => setTimeout(r, ms))
+const now = () => new Date().toTimeString().slice(0,8)
+
+function log(level, msg) {
+  const list = document.getElementById('logList')
+  const cls = { OK:'l-ok', INFO:'l-info', WARN:'l-warn', ERROR:'l-err' }[level] || 'l-info'
+  const el = document.createElement('div')
+  el.className = 'log-entry'
+  el.innerHTML = `<span class="l-time">[${now()}]</span> <span class="${cls}">[${level}]</span> <span class="l-msg">${msg}</span>`
+  list.insertBefore(el, list.firstChild)
+  while (list.children.length > 60) list.removeChild(list.lastChild)
+}
+
+function setCard(name, status, sev) {
+  const card = document.getElementById('card-' + name)
+  if (!card) return
+  card.className = 'service-card' + (status === 'crashed' ? ' crashed' : status === 'degraded' ? ' degraded' : status === 'inactive' ? ' inactive' : '')
+
+  const badge = document.getElementById('status-' + name)
+  if (badge) {
+    const map = { up: ['up','UP'], crashed: ['down','DOWN'], degraded: ['degraded','DEGRADED'], standby: ['standby','STANDBY'] }
+    const [cls, txt] = map[status] || ['up','UP']
+    badge.className = 'badge ' + cls
+    badge.textContent = txt
+  }
+
+  const sevEl = document.getElementById('sev-' + name)
+  if (sevEl && sev) {
+    sevEl.className = 'tag sev-' + sev
+    sevEl.textContent = sev
+  }
+}
+
+function setCircuit(state) {
+  const el = document.getElementById('stat-ckt')
+  el.textContent = state
+  const colors = { CLOSED: 'var(--green)', OPEN: 'var(--red)', 'HALF-OPEN': 'var(--yellow)' }
+  el.style.color = colors[state] || 'var(--muted)'
+}
+
+function setSeverityDisplay(sev) {
+  const el = document.getElementById('stat-sev')
+  el.textContent = sev
+  const colors = { LOW:'var(--green)', MEDIUM:'var(--yellow)', HIGH:'var(--orange)', CRITICAL:'var(--red)' }
+  el.style.color = colors[sev] || 'var(--muted)'
+}
+
+function calcSeverity(svcName) {
+  const history = S.failHistory[svcName] || []
+  const now5 = history.filter(t => Date.now() - t < 300000).length
+  const now10 = history.filter(t => Date.now() - t < 600000).length
+  if (now10 >= 5) return 'CRITICAL'
+  if (now5 >= 3) return 'HIGH'
+  if (now5 >= 2) return 'MEDIUM'
+  return 'LOW'
+}
+
+// ─────────────────────────────────────────
+// PIPELINE
+// ─────────────────────────────────────────
+function resetPipeline() {
+  ['monitor','eb','lambda','agent','docker','done'].forEach(n => {
+    document.getElementById('node-'+n).className = 'p-node'
+  })
+  ;['1','2','3','4','5'].forEach(n => {
+    document.getElementById('arr'+n).className = 'p-arrow'
+  })
+}
+
+async function animatePipeline(steps, dockerLabel='restart', lambdaLabel='decision') {
+  resetPipeline()
+  document.getElementById('node-docker-sub').textContent = dockerLabel
+  document.getElementById('node-lambda-sub').textContent = lambdaLabel
+
+  const nodes = ['monitor','eb','lambda','agent','docker','done']
+  const arrows = ['1','2','3','4','5']
+
+  for (let i = 0; i < steps; i++) {
+    if (i > 0) {
+      document.getElementById('arr'+i).className = 'p-arrow active'
+      await sleep(280)
+      document.getElementById('arr'+i).className = 'p-arrow done'
+    }
+    const cls = (i === steps - 1 && dockerLabel === 'stop') ? 'p-node warn' : 'p-node active'
+    document.getElementById('node-'+nodes[i]).className = cls
+    await sleep(550)
+    if (i < steps - 1) {
+      document.getElementById('node-'+nodes[i]).className = 'p-node done'
+    }
+  }
+}
+
+// ─────────────────────────────────────────
+// POLL COUNTER
+// ─────────────────────────────────────────
+setInterval(() => {
+  S.pollCount++
+  document.getElementById('poll-count').textContent = `polls: ${S.pollCount}`
+}, 5000)
+
+// ─────────────────────────────────────────
+// SCENARIOS
+// ─────────────────────────────────────────
+function setAllBtns(disabled) {
+  document.querySelectorAll('.s-btn').forEach(b => b.disabled = disabled)
+}
+
+function silentReset() {
+  ;['core','payment','movie'].forEach(s => {
+    setCard(s, 'up', 'LOW')
+    const lat = { core:'latency: 3ms', payment:'latency: 2ms · critical=true', movie:'latency: 3ms' }
+    document.getElementById('lat-'+s).textContent = lat[s]
+    S.failHistory[s] = []
+  })
+  setCard('fallback', 'standby')
+  document.getElementById('lat-fallback').textContent = 'waiting for traffic'
+  setCircuit('CLOSED')
+  resetPipeline()
+}
+
+async function run(type) {
+  if (S.running) return
+  S.running = true
+  setAllBtns(true)
+  silentReset()
+  await sleep(200)
+  try {
+    if (type === 'movie') await scenarioMovie()
+    else if (type === 'payment') await scenarioPayment()
+    else if (type === 'repeat') await scenarioRepeat()
+    else if (type === 'slow') await scenarioSlow()
+  } finally {
+    S.running = false
+    setAllBtns(false)
+  }
+}
+
+// ── SHARED: circuit breaker open helper ──
+async function openCircuit(svc, hasFallback) {
+  log('WARN', `Circuit breaker (${svc}): 3 consecutive failures → OPEN`)
+  setCircuit('OPEN')
+  if (hasFallback) {
+    log('INFO', `Circuit OPEN → routing traffic to fallback-service (degraded mode)`)
+    setCard('fallback', 'degraded')
+    document.getElementById('lat-fallback').textContent = '▶ serving degraded traffic'
+  } else {
+    log('WARN', `Circuit OPEN → NO fallback available (payment critical=true)`)
+    log('WARN', `Clients receive error until payment-service recovers`)
+  }
+}
+
+async function closeCircuit(svc) {
+  log('INFO', `Circuit → HALF-OPEN → 1 probe request sent to ${svc}`)
+  setCircuit('HALF-OPEN')
+  await sleep(800)
+  log('OK', `Probe success → Circuit → CLOSED — ${svc} fully restored ✓`)
+  setCircuit('CLOSED')
+  setCard('fallback', 'standby')
+  document.getElementById('lat-fallback').textContent = 'waiting for traffic'
+}
+
+// ── SCENARIO 1: Movie crash ──────────────
+async function scenarioMovie() {
+  const svc = 'movie'
+  S.failHistory[svc] = S.failHistory[svc] || []
+  S.failHistory[svc].push(Date.now())
+  const sev = calcSeverity(svc)
+  const start = Date.now()
+
+  log('ERROR', `movie-service → HTTP 503 (crash detected)`)
+  setCard(svc, 'crashed', sev)
+  await sleep(400)
+
+  // Circuit breaker — same as core-service
+  await openCircuit('movie-service', true)
+  await sleep(500)
+
+  log('INFO', `Monitor: DOWN detected → cooldown check → publishing to EventBridge`)
+  await animatePipeline(3, 'restart', 'decide')
+
+  S.lambdaCount++
+  document.getElementById('stat-lambda').textContent = S.lambdaCount
+  log('INFO', `Lambda: strategy=fallback  severity=${sev}  action=restart_service`)
+  document.getElementById('node-lambda-sub').textContent = `sev=${sev}`
+  await animatePipeline(5, 'restart', `sev=${sev}`)
+
+  await sleep(500)
+  log('OK', `recovery-agent: docker restart movie-service → success`)
+  await animatePipeline(6, 'restart', `sev=${sev}`)
+
+  const mttr = ((Date.now() - start) / 1000).toFixed(1) + 's'
+  await sleep(300)
+
+  setCard(svc, 'up', 'LOW')
+  document.getElementById('lat-movie').textContent = 'latency: 3ms'
+
+  // Circuit closes — same as core-service
+  await closeCircuit('movie-service')
+
+  S.recoveries++
+  document.getElementById('stat-recoveries').textContent = S.recoveries
+  document.getElementById('stat-mttr').textContent = mttr
+  setSeverityDisplay(sev)
+  log('OK', `Total recovery time: ${mttr} · severity=${sev} · success=true`)
+  resetPipeline()
+}
+
+// ── SCENARIO 2: Payment crash (escalate) ─
+async function scenarioPayment() {
+  const svc = 'payment'
+  S.failHistory[svc] = S.failHistory[svc] || []
+  S.failHistory[svc].push(Date.now())
+  const start = Date.now()
+
+  log('ERROR', `payment-service → HTTP 503 (crash detected)`)
+  setCard(svc, 'crashed', 'LOW')
+  await sleep(400)
+
+  // Circuit breaker — same mechanism, but NO fallback (critical service)
+  await openCircuit('payment-service', false)
+  await sleep(500)
+
+  log('INFO', `Monitor: DOWN detected → publishing to EventBridge`)
+  await animatePipeline(3, 'restart', 'decide')
+
+  S.lambdaCount++
+  document.getElementById('stat-lambda').textContent = S.lambdaCount
+  await sleep(300)
+
+  // Escalate strategy — payment forces HIGH severity immediately
+  log('WARN', `STRATEGY: escalate → payment-service critical=true`)
+  log('WARN', `Lambda: severity LOW → forced HIGH (1st failure treated as serious)`)
+  setCard(svc, 'crashed', 'HIGH')
+  document.getElementById('node-lambda-sub').textContent = 'escalate→HIGH'
+
+  await sleep(400)
+  log('INFO', `Lambda: action=restart_service  severity=HIGH  escalated=True`)
+  await animatePipeline(5, 'restart', 'sev=HIGH')
+
+  await sleep(600)
+  log('OK', `recovery-agent: docker restart payment-service → success`)
+  await animatePipeline(6, 'restart', 'sev=HIGH')
+
+  const mttr = ((Date.now() - start) / 1000).toFixed(1) + 's'
+  await sleep(300)
+
+  setCard(svc, 'up', 'LOW')
+
+  // Circuit closes — same mechanism as others, just no fallback involved
+  await closeCircuit('payment-service')
+
+  S.recoveries++
+  document.getElementById('stat-recoveries').textContent = S.recoveries
+  document.getElementById('stat-mttr').textContent = mttr
+  setSeverityDisplay('HIGH')
+  log('OK', `payment-service recovered · circuit CLOSED · severity was HIGH (escalate) ✓`)
+  resetPipeline()
+}
+
+// ── SCENARIO 3: Repeat crash → CRITICAL ──
+async function scenarioRepeat() {
+  const svc = 'core'
+  S.failHistory[svc] = []
+  log('INFO', `Starting repeat crash simulation on core-service (5 crashes)...`)
+  await sleep(400)
+
+  const severities = ['LOW', 'MEDIUM', 'HIGH', 'HIGH', 'CRITICAL']
+
+  for (let i = 0; i < 5; i++) {
+    S.failHistory[svc].push(Date.now())
+    const sev = severities[i]
+    const isCrit = sev === 'CRITICAL'
+
+    log('ERROR', `core-service crash #${i+1}/5 detected`)
+    setCard(svc, 'crashed', sev)
+
+    if (i >= 2 && !isCrit) {
+      log('WARN', `ESCALATION: core-service failed ${i+1}x in 5min — repeated failure pattern`)
+    }
+    if (isCrit) {
+      log('WARN', `ESCALATION: core-service failed 5x in 10min — CRITICALLY UNSTABLE`)
+      log('WARN', `SmartRecoveryPolicy: switching action restart → enable_fallback`)
+    }
+
+    await sleep(300)
+    await animatePipeline(3, isCrit ? 'stop' : 'restart', `sev=${sev}`)
+    S.lambdaCount++
+    document.getElementById('stat-lambda').textContent = S.lambdaCount
+    await sleep(300)
+
+    if (isCrit) {
+      await animatePipeline(5, 'stop', `sev=CRITICAL`)
+      await sleep(500)
+      log('OK', `docker stop core-service → fallback-service absorbing ALL traffic`)
+      log('WARN', `ROLLBACK_RECOMMENDED: core-service:latest (dry-run)`)
+      setCard('fallback', 'degraded')
+      document.getElementById('lat-fallback').textContent = '▶ serving all traffic'
+      setCircuit('OPEN')
+      await animatePipeline(6, 'stop', 'sev=CRITICAL')
+      setSeverityDisplay('CRITICAL')
+      log('INFO', `Failure history cleared — next incident starts fresh at LOW`)
+    } else {
+      await animatePipeline(5, 'restart', `sev=${sev}`)
+      await sleep(400)
+      log('OK', `docker restart core-service → success (crash #${i+1})`)
+      setCard(svc, 'up', sev)
+      await animatePipeline(6, 'restart', `sev=${sev}`)
+    }
+
+    await sleep(600)
+    resetPipeline()
+  }
+
+  S.recoveries++
+  document.getElementById('stat-recoveries').textContent = S.recoveries
+  document.getElementById('stat-mttr').textContent = '~5x'
+  log('INFO', `System stable: fallback-service handling traffic · core-service stopped · operator review recommended`)
+}
+
+// ── SCENARIO 4: Slow response ─────────────
+async function scenarioSlow() {
+  const svc = 'movie'
+  const start = Date.now()
+
+  log('WARN', `movie-service → response latency = 1340ms (threshold: 1000ms)`)
+  document.getElementById('lat-movie').textContent = '⚠ latency: 1340ms'
+  await sleep(500)
+
+  log('INFO', `LatencyChecker: VERY_SLOW detected → failure_type=slow`)
+  log('INFO', `Monitor: publishing slow event to EventBridge (not a crash, but still triggers Lambda)`)
+  await animatePipeline(3, 'stop', 'failure=slow')
+
+  S.lambdaCount++
+  document.getElementById('stat-lambda').textContent = S.lambdaCount
+  await sleep(300)
+
+  log('INFO', `Lambda: failure_type=slow → action=enable_fallback (any severity triggers this)`)
+  await animatePipeline(5, 'stop', 'slow→fallback')
+
+  await sleep(700)
+  log('OK', `docker stop movie-service → route traffic to fallback-service`)
+  setCard(svc, 'crashed')
+  setCard('fallback', 'degraded')
+  document.getElementById('lat-fallback').textContent = '▶ serving degraded traffic'
+  await animatePipeline(6, 'stop', 'slow→fallback')
+
+  const mttr = ((Date.now() - start) / 1000).toFixed(1) + 's'
+  S.recoveries++
+  document.getElementById('stat-recoveries').textContent = S.recoveries
+  document.getElementById('stat-mttr').textContent = mttr
+  setSeverityDisplay('LOW')
+
+  log('INFO', `Slow service stopped — fallback serving · movie-service needs investigation`)
+  resetPipeline()
+}
+
+// ─────────────────────────────────────────
+// RESET
+// ─────────────────────────────────────────
+function resetAll() {
+  if (S.running) return
+  ;['core','payment','movie'].forEach(s => {
+    setCard(s, 'up', 'LOW')
+    const lat = { core:'latency: 3ms', payment:'latency: 2ms · critical=true', movie:'latency: 3ms' }
+    document.getElementById('lat-'+s).textContent = lat[s]
+    S.failHistory[s] = []
+  })
+  setCard('fallback', 'standby')
+  document.getElementById('lat-fallback').textContent = 'waiting for traffic'
+  setCircuit('CLOSED')
+  resetPipeline()
+  log('OK', `All services reset → healthy state restored ✓`)
+}
+
+// ─────────────────────────────────────────
+// INIT
+// ─────────────────────────────────────────
+log('OK', `Self-healing system online — 5 services ready`)
+setTimeout(() => log('INFO', `Config-driven gateway loaded — services_config.json · route: GET /{service_name}`), 600)
+setTimeout(() => log('INFO', `Monitor: asyncio.gather() → 5 parallel health checks every 5s`), 1200)
+setTimeout(() => log('INFO', `EventBridge rule active: SelfHealingFailureRule → Lambda`), 1800)
+setTimeout(() => log('INFO', `SmartRecoveryPolicy loaded — severity ladder: LOW→MEDIUM→HIGH→CRITICAL`), 2400)
+setTimeout(() => log('INFO', `Per-service circuit breakers: core=fallback · payment=escalate · movie=fallback`), 3000)
+setTimeout(() => log('INFO', `Select a scenario below to simulate failure and recovery`), 3600)
+</script>
+</body>
+</html>

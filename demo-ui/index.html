@@ -670,16 +670,22 @@ async function run(type) {
 }
 
 // ── SHARED: circuit breaker open helper ──
+// Shows realistic failure progression: 3 gateway request failures build up
+// before the circuit trips — mirroring the real CIRCUIT_FAILURE_THRESHOLD=3 behaviour.
 async function openCircuit(svc, hasFallback) {
-  log('WARN', `Circuit breaker (${svc}): 3 consecutive failures → OPEN`)
+  log('WARN', `GET /${svc} → 503  CircuitBreaker: failure recorded 1/3`)
+  await sleep(350)
+  log('WARN', `GET /${svc} → 503  CircuitBreaker: failure recorded 2/3`)
+  await sleep(350)
+  log('WARN', `GET /${svc} → 503  CircuitBreaker: CLOSED → OPEN (failures=3/3 threshold=3)`)
   setCircuit('OPEN')
+  await sleep(200)
   if (hasFallback) {
-    log('INFO', `Circuit OPEN → routing traffic to fallback-service (degraded mode)`)
+    log('INFO', `Circuit OPEN → routing all traffic to fallback-service (degraded mode)`)
     setCard('fallback', 'degraded')
     document.getElementById('lat-fallback').textContent = '▶ serving degraded traffic'
   } else {
-    log('WARN', `Circuit OPEN → NO fallback available (payment critical=true)`)
-    log('WARN', `Clients receive error until payment-service recovers`)
+    log('WARN', `Circuit OPEN → strategy=escalate · NO fallback · clients receive HTTP 503`)
   }
 }
 

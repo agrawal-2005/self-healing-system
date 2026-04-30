@@ -92,7 +92,8 @@ flowchart TD
         mon["monitor\nasyncio.gather() · 5s · parallel"]
 
         subgraph AGENT["recovery-agent :8003"]
-            ra["validate token\ndocker restart / stop\nwrite history · emit metrics"]
+            ra["hmac token check\ndocker restart / stop\ncapture logs (tail 200)\nwrite history (flock) · emit metrics"]
+            cr["crash_reports/\nincidents/ · tests/"]
         end
     end
 
@@ -107,6 +108,7 @@ flowchart TD
 
         dlq["SQS DLQ"]
         cw["CloudWatch\nMetrics + Dashboard · 20 widgets"]
+        s3["S3 — self-healing-crash-reports\nincidents/<service>/<date>/"]
     end
 
     client -->|"GET /{service_name}"| gwsvc
@@ -132,6 +134,8 @@ flowchart TD
     LAM -.->|on hard failure| dlq
     LAM -->|"severity + escalation metrics"| cw
     ra -->|"RecoverySuccess + Duration"| cw
+    ra -->|"on enable_fallback\nsnapshot last 200 log lines"| cr
+    cr -.->|"real incidents only"| s3
 ```
 
 **End-to-end recovery time: ~5–30 seconds from crash detection to full health.**
@@ -152,6 +156,7 @@ This project was built incrementally across 8 phases, each adding a production-g
 | **Phase 6** | Advanced self-healing — SmartRecoveryPolicy, IncidentSeverity, escalation logic, RollbackManager, new CloudWatch widgets |
 | **Phase 7** | Multi-service platform — `services_config.json` registry, per-service strategies (restart/escalate/fallback), payment-service and movie-service added as real-world examples, 20-widget dashboard |
 | **Phase 8** | Config-driven gateway — api-service becomes a true generic proxy (`GET /{service_name}`). One `GenericServiceClient`, one `ServiceRegistry`, one `call()` method. Adding a new service = 1 JSON line, zero code changes. Monitor health checks parallelised with `asyncio.gather()` — cycle time = slowest single check, not sum. |
+| **Phase 9** | Crash report capture + production hardening — recovery-agent snapshots the last 200 container log lines on `enable_fallback`, writes them to `incidents/` (real) or `tests/` (synthetic) by reason prefix, and mirrors real reports to S3 (`s3://…/incidents/<service>/<date>/`) for AWS-console-accessible durable storage. CircuitBreaker is now thread-safe (`RLock`), JSONL writes use `fcntl.flock` so concurrent Lambda retries don't interleave, the recovery token uses `hmac.compare_digest`, and `target_service` is regex-validated as defence-in-depth. |
 
 ---
 
@@ -179,6 +184,10 @@ This project was built incrementally across 8 phases, each adding a production-g
 | **Escalate Strategy** | 7 | Critical services with no fallback (payment-service) have every failure forced to minimum severity=HIGH. Operator intervention is always alerted. |
 | **Fallback Strategy** | 7 | Services with a declared fallback (movie-service) log `FALLBACK_AVAILABLE` with the target service name on CRITICAL, enabling traffic routing. |
 | **Multi-Service Dashboard** | 7 | 20-widget CloudWatch dashboard with Phase 7 section: per-service failures, recovery outcomes, severity, escalations, rollback, and duration broken down by service. |
+| **Crash Report Capture** | 9 | Before `enable_fallback` stops a container, recovery-agent captures `docker logs --tail 200` and writes a structured incident report. Routed by reason prefix: `[TEST]…` → `crash_reports/tests/`, real Lambda calls → `crash_reports/incidents/`. Keeps the developer-facing folder uncluttered. |
+| **S3 Durable Crash Storage** | 9 | Real incident reports are mirrored to S3 with date-partitioned keys (`s3://<bucket>/incidents/<service>/<YYYY-MM-DD>/<file>.txt`). Survives EC2 restart/replacement, browsable in the AWS console, and lifecycle-rule-friendly (Glacier after 90d). Test reports are skipped to keep the bucket clean. |
+| **Concurrency Hardening** | 9 | CircuitBreaker state mutations protected by `threading.RLock`. JSONL audit-log appends serialized via `fcntl.flock(LOCK_EX)` so Lambda retries can't interleave records. |
+| **Defence-in-Depth** | 9 | `hmac.compare_digest` for the recovery token (no timing oracle). `target_service` regex-validated at the schema layer (`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`) so a bad allowlist can't escape the crash-report directory. Pooled `httpx.AsyncClient` with `follow_redirects=False` and JSON-decode failures surfaced as request failures (engages the breaker, not a 500 leak). |
 
 ---
 
@@ -381,6 +390,41 @@ Each service declares one of three strategies:
 | `escalate` | Minimum severity = HIGH on every failure. For critical services with no fallback — operator must be notified every time. | payment-service |
 | `fallback` | Same as restart, but logs `FALLBACK_AVAILABLE` with the named fallback service on CRITICAL. Enables traffic routing. | movie-service |
 
+### Crash Report Capture (Phase 9)
+
+When SmartRecoveryPolicy escalates to CRITICAL and Lambda fires `enable_fallback`, the container is about to be stopped — its logs would be unreachable after `docker stop` (and gone entirely after `docker rm`). recovery-agent therefore snapshots the last 200 lines **before** stopping the container and writes a structured report:
+
+```
+========================================================================
+CRASH REPORT — movie-service
+Captured  : 2026-04-30T22-31-05-123456Z
+Severity  : CRITICAL
+Failures  : 5 consecutive crashes
+Action    : enable_fallback (enable_fallback triggered)
+Reason    : 5 crashes in 10 min — service unstable
+Escalation: ESCALATION: movie-service failed 5x — switching to fallback
+========================================================================
+
+── CONTAINER LOGS (last 200 lines) ──
+…
+```
+
+**Routing by reason prefix** keeps developer-facing storage uncluttered:
+
+| Reason starts with | Local path | S3 mirrored? |
+|---|---|---|
+| `[TEST]…` | `recovery-agent/data/crash_reports/tests/` | No |
+| anything else (real Lambda) | `recovery-agent/data/crash_reports/incidents/` | Yes |
+
+**S3 layout** (when `S3_CRASH_REPORTS_BUCKET` is set):
+
+```
+s3://<bucket>/incidents/<service>/<YYYY-MM-DD>/<service>_<UTC>.txt
+e.g. s3://self-healing-crash-reports/incidents/movie-service/2026-04-30/movie-service_2026-04-30T22-31-05-123456Z.txt
+```
+
+Date-partitioning is intentional: easy to find "today's incidents" in the console, plays well with S3 lifecycle rules (Glacier after 90 days), and Athena/S3 Select can query a date range cheaply. S3 upload errors are intentionally swallowed — a storage failure must never abort a recovery action that already worked.
+
 ### Rollback Manager
 
 The `RollbackManager` class tracks the last-known-good image tag for each service. When severity reaches CRITICAL, it logs a `ROLLBACK_RECOMMENDED` event with the image reference:
@@ -516,9 +560,17 @@ self-healing-system/
 ├── recovery-agent/             # Docker command executor (:8003)
 │   └── app/
 │       ├── services/
-│       │   ├── recovery_service.py     # restart / stop / start
-│       │   └── recovery_history.py     # append-only JSONL audit log
-│       └── routes/recovery_routes.py  # POST /action (token-authenticated)
+│       │   ├── recovery_service.py     # restart / stop / start · crash report capture
+│       │   ├── recovery_history.py     # append-only JSONL audit log (fcntl-locked)
+│       │   └── docker_executor.py      # docker CLI wrapper · capture_logs(tail=200)
+│       ├── publishers/
+│       │   ├── cloudwatch_publisher.py # custom metrics (no-op when disabled)
+│       │   └── s3_crash_report_publisher.py  # mirrors real reports to S3
+│       └── routes/recovery_routes.py  # POST /action (hmac.compare_digest token)
+│   └── data/
+│       └── crash_reports/
+│           ├── incidents/              # real Lambda-driven crashes (committed: ignored)
+│           └── tests/                  # synthetic [TEST] reports (committed: ignored)
 │
 ├── monitor/                    # Async parallel health watcher (runs on EC2, not Docker)
 │   ├── monitor.py              # asyncio.run(monitor.run_async()) entry point
@@ -583,6 +635,7 @@ self-healing-system/
 | SQS Dead-Letter Queue | `SelfHealingLambdaDLQ` |
 | CloudWatch Dashboard | `SelfHealingSystemDashboard` |
 | EC2 Instance | Ubuntu 22.04, ports 8000–8003, 8010, 8020 open |
+| S3 Bucket (optional, Phase 9) | `self-healing-crash-reports` — durable storage for incident reports. EC2 IAM role needs `s3:PutObject` on `<bucket>/incidents/*`. |
 
 ---
 
@@ -805,7 +858,37 @@ done
 # On CRITICAL → Lambda logs: FALLBACK_AVAILABLE: movie-service → fallback-service
 ```
 
-#### Test 8 — Phase 7: simultaneous multi-service failure
+#### Test 8 — Phase 9: crash report capture (direct curl)
+
+Hits recovery-agent directly with a `[TEST]`-prefixed reason so the report lands in `tests/` (not `incidents/`) and S3 upload is skipped:
+
+```bash
+curl -s -X POST http://$EC2:8003/action \
+  -H "Content-Type: application/json" \
+  -H "X-Recovery-Token: dev-token" \
+  -d '{
+    "action": "enable_fallback",
+    "target_service": "movie-service",
+    "reason": "[TEST] crash report capture verification",
+    "severity": "CRITICAL",
+    "failure_count": 5
+  }' | jq
+
+# Then confirm a report appeared
+ls recovery-agent/data/crash_reports/tests/
+# movie-service_2026-04-30T22-31-05-123456Z.txt
+```
+
+To restore movie-service after the test:
+
+```bash
+curl -s -X POST http://$EC2:8003/action \
+  -H "Content-Type: application/json" \
+  -H "X-Recovery-Token: dev-token" \
+  -d '{"action":"disable_fallback","target_service":"movie-service","reason":"[TEST] cleanup"}'
+```
+
+#### Test 9 — Phase 7: simultaneous multi-service failure
 
 ```bash
 # Crash all three services at the same time
@@ -1032,6 +1115,40 @@ lambda_handler: complete — success=True  severity=CRITICAL  duration=241ms  at
   "recovery_strategy": "standard_restart",
   "escalation_reason": "ESCALATION: payment-service is a critical service with no fallback — severity forced to HIGH on every failure"
 }
+```
+
+### Crash report file (Phase 9)
+
+Saved to `recovery-agent/data/crash_reports/incidents/<service>_<UTC>.txt` and mirrored to S3 when the bucket is configured:
+
+```
+========================================================================
+CRASH REPORT — movie-service
+Captured  : 2026-04-30T22-31-05-123456Z
+Severity  : CRITICAL
+Failures  : 5 consecutive crashes
+Action    : enable_fallback (enable_fallback triggered)
+Reason    : 5 crashes in 10 min — service unstable
+Escalation: ESCALATION: movie-service failed 5x — switching to fallback
+========================================================================
+
+── CONTAINER LOGS (last 200 lines) ──
+
+INFO:     Started server process [1]
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8020
+INFO:     127.0.0.1:54312 - "GET /catalog HTTP/1.1" 200 OK
+ERROR:    movie-service: simulated crash triggered via /fail
+ERROR:    movie-service: /catalog returning 503 (crashed=true)
+…
+
+── END OF REPORT ──
+```
+
+```
+2026-04-30 22:31:05 [recovery_service] INFO: crash report saved → /app/data/crash_reports/incidents/movie-service_2026-04-30T22-31-05-123456Z.txt
+2026-04-30 22:31:05 [s3_crash_report_publisher] INFO: uploaded crash report → s3://self-healing-crash-reports/incidents/movie-service/2026-04-30/movie-service_2026-04-30T22-31-05-123456Z.txt
+2026-04-30 22:31:05 [recovery_service] INFO: crash report mirrored to S3 → s3://self-healing-crash-reports/incidents/movie-service/2026-04-30/movie-service_2026-04-30T22-31-05-123456Z.txt
 ```
 
 ### Circuit breaker log progression

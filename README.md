@@ -78,16 +78,21 @@ flowchart TD
     client(["Client"])
 
     subgraph EC2["AWS EC2 — Docker Compose"]
-        api["api-service :8000\nCircuit Breaker"]
-        core["core-service :8001\nstrategy: restart"]
-        fb["fallback-service :8002\nshared fallback"]
-        pay["payment-service :8010\nstrategy: escalate"]
+        cfg[["services_config.json\nsingle source of truth"]]
+
+        subgraph GW["api-service :8000 — Config-Driven Gateway"]
+            sreg["ServiceRegistry\nloads config at startup"]
+            gwsvc["GatewayService · GET /{service_name}\nper-service CircuitBreaker"]
+        end
+
+        core["core-service :8001\nstrategy: fallback"]
+        fb["fallback-service :8002\nshared fallback backend"]
+        pay["payment-service :8010\nstrategy: escalate · critical"]
         mov["movie-service :8020\nstrategy: fallback"]
-        mon["monitor\npoll /health every 5s"]
-        cfg[["services_config.json\nservice registry"]]
+        mon["monitor\nasyncio.gather() · 5s · parallel"]
 
         subgraph AGENT["recovery-agent :8003"]
-            ra["validate token\ndocker restart / stop\nwrite history\nemit metrics"]
+            ra["validate token\ndocker restart / stop\nwrite history · emit metrics"]
         end
     end
 
@@ -95,36 +100,38 @@ flowchart TD
         eb["EventBridge\nSelfHealingFailureRule"]
 
         subgraph LAM["Lambda — RecoveryHandler"]
-            reg["Service Registry"]
             policy["SmartRecoveryPolicy\nLOW / MEDIUM / HIGH / CRITICAL"]
             strat["Strategy Override"]
             rollback["RollbackManager"]
         end
 
         dlq["SQS DLQ"]
-        cw["CloudWatch\nMetrics + Dashboard\n20 widgets"]
+        cw["CloudWatch\nMetrics + Dashboard · 20 widgets"]
     end
 
-    client -->|GET /process| api
-    api -->|circuit CLOSED| core
-    api -->|circuit OPEN| fb
-    cfg -.->|drives| mon
+    client -->|"GET /{service_name}"| gwsvc
+    cfg -.->|"drives routing + strategies"| sreg
+    sreg --> gwsvc
+    gwsvc -->|"cb CLOSED · strategy=fallback"| core
+    gwsvc -->|"cb CLOSED · strategy=escalate"| pay
+    gwsvc -->|"cb CLOSED · strategy=fallback"| mov
+    gwsvc -->|"cb OPEN · strategy=fallback"| fb
+    cfg -.->|drives service list| mon
     cfg -.->|bundled in zip| LAM
     core -.->|health poll| mon
     fb -.->|health poll| mon
     pay -.->|health poll| mon
     mov -.->|health poll| mon
-    api -->|FallbackUsed + CircuitBreaker| cw
+    gwsvc -->|"FallbackUsed + CircuitBreakerState"| cw
     mon -->|ServiceFailureDetected| eb
     mon -->|FailureDetectedCount| cw
     eb -->|invoke| LAM
-    reg --> strat
     policy --> strat
     strat --> rollback
-    LAM -->|POST /action + token| ra
+    LAM -->|"POST /action + X-Recovery-Token"| ra
     LAM -.->|on hard failure| dlq
-    LAM -->|severity + escalation metrics| cw
-    ra -->|RecoverySuccess + Duration| cw
+    LAM -->|"severity + escalation metrics"| cw
+    ra -->|"RecoverySuccess + Duration"| cw
 ```
 
 **End-to-end recovery time: ~5–30 seconds from crash detection to full health.**
@@ -133,7 +140,7 @@ flowchart TD
 
 ## Phase Progression
 
-This project was built incrementally across 7 phases, each adding a production-grade capability:
+This project was built incrementally across 8 phases, each adding a production-grade capability:
 
 | Phase | What Was Built |
 |---|---|
@@ -191,7 +198,7 @@ This project was built incrementally across 7 phases, each adding a production-g
 | **Observability** | AWS CloudWatch (custom metrics + 20-widget dashboard) |
 | **Deployment** | AWS Systems Manager (SSM) send-command |
 | **Configuration** | pydantic-settings (env-based) |
-| **Testing** | pytest, 33-test suite (unit + integration) |
+| **Testing** | pytest, 74-test suite — 41 api-service unit tests (CircuitBreaker, ServiceRegistry, GatewayService) + 33 Lambda unit tests |
 
 ---
 
@@ -208,8 +215,9 @@ Client ──► GET /payment-service ──► api-service gateway ──► pa
 ### Failure → Auto-Recovery (8 steps)
 
 ```
-Step 1   Client calls GET /process
-         api-service tries core-service → returns 503 (crashed)
+Step 1   Client calls GET /core-service
+         GatewayService looks up "core-service" in ServiceRegistry
+         GenericServiceClient tries core-service → returns 503 (crashed)
 
 Step 2   Circuit Breaker opens after 3 consecutive failures
          api-service routes all traffic to fallback-service
@@ -686,18 +694,38 @@ aws lambda update-function-configuration \
 
 ## Testing the System
 
-### Unit Tests (Lambda)
+### Unit Tests
 
 ```bash
+# api-service — 41 tests (CircuitBreaker, ServiceRegistry, GatewayService)
+cd api-service
+pip install -r requirements.txt -r requirements-test.txt
+pytest
+# 41 passed
+
+# Lambda — 33 tests (SmartRecoveryPolicy, RollbackManager)
 cd aws/lambda
 python -m pytest tests/ -v
+# 33 passed
+```
 
-# Expected output:
-# tests/test_smart_recovery_policy.py::test_first_failure_is_low_severity PASSED
-# tests/test_smart_recovery_policy.py::test_high_severity_escalation PASSED
-# tests/test_smart_recovery_policy.py::test_critical_overrides_action_to_fallback PASSED
-# tests/test_rollback_manager.py::test_recommend_rollback_on_critical PASSED
-# ... 33 tests passed
+### Gateway Routes Smoke Test (Phase 8)
+
+Verifies all 6 service health checks, all `GET /{service_name}` routes, 404 for unknown services, circuit breaker isolation, and payment escalate strategy — no AWS required.
+
+```bash
+# Against local
+chmod +x tests/scripts/gateway_routes_smoke_test.sh
+./tests/scripts/gateway_routes_smoke_test.sh
+
+# Against EC2
+API_URL=http://54.224.134.71:8000 \
+CORE_URL=http://54.224.134.71:8001 \
+FALLBACK_URL=http://54.224.134.71:8002 \
+RECOVERY_AGENT_URL=http://54.224.134.71:8003 \
+PAYMENT_URL=http://54.224.134.71:8010 \
+MOVIE_URL=http://54.224.134.71:8020 \
+./tests/scripts/gateway_routes_smoke_test.sh
 ```
 
 ### End-to-End Chaos Test
@@ -708,7 +736,9 @@ chmod +x tests/scripts/critical_core_failure_recovery.sh
 ./tests/scripts/critical_core_failure_recovery.sh
 
 # Against EC2
-EC2=<your-ec2-ip> ./tests/scripts/critical_core_failure_recovery.sh
+API_URL=http://54.224.134.71:8000 \
+CORE_URL=http://54.224.134.71:8001 \
+./tests/scripts/critical_core_failure_recovery.sh
 ```
 
 ### Manual Tests
@@ -716,7 +746,7 @@ EC2=<your-ec2-ip> ./tests/scripts/critical_core_failure_recovery.sh
 #### Test 1 — Verify baseline
 
 ```bash
-curl http://$EC2:8000/process
+curl http://$EC2:8000/core-service
 # { "source": "core-service", "degraded": false }
 ```
 
@@ -730,7 +760,7 @@ curl -X POST http://$EC2:8001/fail
 #### Test 3 — Observe fallback immediately
 
 ```bash
-curl http://$EC2:8000/process
+curl http://$EC2:8000/core-service
 # { "source": "fallback-service", "degraded": true }
 ```
 
@@ -738,7 +768,7 @@ curl http://$EC2:8000/process
 
 ```bash
 sleep 30
-curl http://$EC2:8000/process
+curl http://$EC2:8000/core-service
 # { "source": "core-service", "degraded": false }
 ```
 

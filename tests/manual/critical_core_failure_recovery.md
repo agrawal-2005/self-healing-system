@@ -144,10 +144,10 @@ curl -s http://localhost:8003/health
 {"status": "healthy", "service": "<service-name>"}
 ```
 
-**Expected `/process` (normal traffic):**
+**Expected `/core-service` (normal traffic):**
 
 ```bash
-curl -s http://localhost:8000/process
+curl -s http://localhost:8000/core-service
 ```
 
 ```json
@@ -158,7 +158,7 @@ curl -s http://localhost:8000/process
 }
 ```
 
-**PASS criteria:** All four return `healthy`. `/process` returns `source: core-service, degraded: false`.
+**PASS criteria:** All four return `healthy`. `/core-service` returns `source: core-service, degraded: false`.
 
 ---
 
@@ -201,7 +201,7 @@ curl -s -o /dev/null -w "%{http_code}" http://localhost:8001/health
 
 ```bash
 for i in 1 2 3 4 5; do
-  RESULT=$(curl -s http://localhost:8000/process)
+  RESULT=$(curl -s http://localhost:8000/core-service)
   echo "Call $i: $(echo $RESULT | python3 -c 'import sys,json; d=json.load(sys.stdin); print("source=" + d["source"] + " degraded=" + str(d["degraded"]))')"
   sleep 0.5
 done
@@ -392,7 +392,7 @@ stdout:                core-service
 curl -s http://localhost:8001/health
 
 # api-service back to normal
-curl -s http://localhost:8000/process
+curl -s http://localhost:8000/core-service
 ```
 
 **Expected core-service:**

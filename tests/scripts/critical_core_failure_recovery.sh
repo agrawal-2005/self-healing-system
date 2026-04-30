@@ -168,8 +168,8 @@ fi
 
 header "Step 1: Verifying Docker Services"
 
-SERVICES=("api-service" "core-service" "fallback-service" "recovery-agent")
-PORTS=("8000" "8001" "8002" "8003")
+SERVICES=("api-service" "core-service" "fallback-service" "recovery-agent" "payment-service" "movie-service")
+PORTS=("8000" "8001" "8002" "8003" "8010" "8020")
 
 for i in "${!SERVICES[@]}"; do
   check_step
@@ -242,14 +242,14 @@ for NAME_URL in "api-service:$API_URL" "core-service:$CORE_URL" "fallback-servic
 done
 
 check_step
-PROCESS_BODY=$(http_body "$API_URL/process")
+PROCESS_BODY=$(http_body "$API_URL/core-service")
 PROCESS_SOURCE=$(json_field "$PROCESS_BODY" "source")
 PROCESS_DEGRADED=$(json_field "$PROCESS_BODY" "degraded")
 
 if [ "$PROCESS_SOURCE" = "core-service" ] && [ "$PROCESS_DEGRADED" = "False" ]; then
-  pass "api-service /process → source=core-service degraded=False"
+  pass "api-service /core-service → source=core-service degraded=False"
 else
-  fail "api-service /process → source=$PROCESS_SOURCE degraded=$PROCESS_DEGRADED (expected core-service / False)"
+  fail "api-service /core-service → source=$PROCESS_SOURCE degraded=$PROCESS_DEGRADED (expected core-service / False)"
 fi
 
 if [ ${#FAILED_STEPS[@]} -gt 0 ]; then
@@ -287,11 +287,11 @@ fi
 
 header "Step 5: Verifying Fallback and Circuit Breaker"
 
-info "Making $((CIRCUIT_FAILURE_THRESHOLD + 2)) calls to /process to open the circuit breaker..."
+info "Making $((CIRCUIT_FAILURE_THRESHOLD + 2)) calls to /core-service to open the circuit breaker..."
 
 FALLBACK_COUNT=0
 for i in $(seq 1 $((CIRCUIT_FAILURE_THRESHOLD + 2))); do
-  BODY=$(http_body "$API_URL/process")
+  BODY=$(http_body "$API_URL/core-service")
   SOURCE=$(json_field "$BODY" "source")
   DEGRADED=$(json_field "$BODY" "degraded")
   echo -e "    Call $i: source=${CYAN}$SOURCE${RESET} degraded=${YELLOW}$DEGRADED${RESET}"
@@ -482,10 +482,10 @@ else
 fi
 
 check_step
-info "Making 3 calls to /process to verify circuit closed..."
+info "Making 3 calls to /core-service to verify circuit closed..."
 CORE_SOURCE_COUNT=0
 for i in 1 2 3; do
-  BODY=$(http_body "$API_URL/process")
+  BODY=$(http_body "$API_URL/core-service")
   SOURCE=$(json_field "$BODY" "source")
   DEGRADED=$(json_field "$BODY" "degraded")
   echo -e "    Call $i: source=${CYAN}$SOURCE${RESET} degraded=${YELLOW}$DEGRADED${RESET}"

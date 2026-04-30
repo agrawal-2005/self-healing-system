@@ -10,7 +10,26 @@ dependency, no pip install, no setup.py. Any machine with `bash`, `curl`, and `p
 
 | Test | Type | Script | Manual Guide |
 |------|------|--------|--------------|
+| Gateway Routes Smoke Test | Smoke · All Services | `scripts/gateway_routes_smoke_test.sh` | — |
 | Critical Core Failure Recovery | End-to-End Chaos | `scripts/critical_core_failure_recovery.sh` | `manual/critical_core_failure_recovery.md` |
+
+### api-service Unit Tests (pytest)
+
+Unit tests for the Phase 8 components live in `api-service/tests/`:
+
+| Module | Test File |
+|--------|-----------|
+| CircuitBreaker state machine | `api-service/tests/unit/test_circuit_breaker.py` |
+| ServiceRegistry JSON loading | `api-service/tests/unit/test_service_registry.py` |
+| GatewayService routing logic | `api-service/tests/unit/test_gateway_service.py` |
+
+Run them from the project root:
+
+```bash
+cd api-service
+pip install -r requirements.txt -r requirements-test.txt
+pytest
+```
 
 ---
 

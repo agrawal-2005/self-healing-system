@@ -23,6 +23,9 @@ aws/lambda/services_config.json
 
 # Recovery agent runtime data — keep the directory, ignore the data files
 recovery-agent/data/*.jsonl
+# Crash report content is runtime-generated; keep the directory + README only
+recovery-agent/data/crash_reports/incidents/*.txt
+recovery-agent/data/crash_reports/tests/*.txt
 
 # macOS
 .DS_Store

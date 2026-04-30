@@ -52,7 +52,11 @@ class RecoveryService:
         self.history_repository   = history_repository
         self.cloudwatch_publisher = cloudwatch_publisher
         self.crash_reports_dir    = crash_reports_dir
-        os.makedirs(crash_reports_dir, exist_ok=True)
+        # Two subfolders so real incidents stay clean and discoverable:
+        #   incidents/ — production CRITICAL escalations from Lambda
+        #   tests/     — manual tests, marked with [TEST] in reason field
+        os.makedirs(os.path.join(crash_reports_dir, "incidents"), exist_ok=True)
+        os.makedirs(os.path.join(crash_reports_dir, "tests"), exist_ok=True)
 
     def health(self) -> HealthResponse:
         return HealthResponse(status="healthy", service=self.service_name)
@@ -178,7 +182,7 @@ class RecoveryService:
         them to a crash report file so developers can diagnose the root cause.
         """
         # ── Step 1: capture logs BEFORE stopping (logs are gone after docker rm) ─
-        self._write_crash_report(request)
+        report_path = self._write_crash_report(request)
 
         # ── Step 2: stop the container ────────────────────────────────────────────
         cmd_result = self.docker_executor.stop(request.target_service)
@@ -188,7 +192,7 @@ class RecoveryService:
             target_service=request.target_service,
             message=(
                 f"Fallback enabled: '{request.target_service}' stopped. "
-                f"Crash report saved to {self.crash_reports_dir}/"
+                f"Crash report saved to {report_path}"
                 if cmd_result.success
                 else f"Failed to stop '{request.target_service}'."
             ),
@@ -196,15 +200,26 @@ class RecoveryService:
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
 
-    def _write_crash_report(self, request: ActionRequest) -> None:
+    def _write_crash_report(self, request: ActionRequest) -> str:
         """Capture the last 200 lines of container logs and write a crash report file.
+
+        Routing:
+          reason starts with "[TEST]"  →  crash_reports/tests/
+          otherwise (real Lambda call) →  crash_reports/incidents/
+
+        This keeps the developer-facing `incidents/` directory clean and
+        free of synthetic test artifacts. Alerting and dashboards should
+        only watch `incidents/`.
 
         File name: <service>_<UTC-timestamp>.txt
         e.g.  core-service_2026-04-30T22-31-05Z.txt
         """
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
         filename = f"{request.target_service}_{ts}.txt"
-        filepath = os.path.join(self.crash_reports_dir, filename)
+
+        is_test = bool(request.reason) and request.reason.strip().upper().startswith("[TEST]")
+        subdir = "tests" if is_test else "incidents"
+        filepath = os.path.join(self.crash_reports_dir, subdir, filename)
 
         log_result = self.docker_executor.capture_logs(request.target_service, tail=200)
 
@@ -238,11 +253,12 @@ class RecoveryService:
             with open(filepath, "w", encoding="utf-8") as f:
                 f.write("\n".join(lines))
             logger.info(
-                "RecoveryService: crash report saved → %s  severity=%s  failures=%s",
-                filepath, request.severity, request.failure_count,
+                "RecoveryService: crash report saved → %s  severity=%s  failures=%s  bucket=%s",
+                filepath, request.severity, request.failure_count, subdir,
             )
         except OSError as exc:
             logger.error("RecoveryService: failed to write crash report → %s", exc)
+        return filepath
 
     def _disable_fallback(self, request: ActionRequest) -> ActionResponse:
         """Start the target container to restore normal routing."""

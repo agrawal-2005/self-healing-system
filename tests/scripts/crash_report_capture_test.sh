@@ -41,6 +41,8 @@ RECOVERY_TOKEN="${RECOVERY_TOKEN:-dev-token}"
 TARGET_SERVICE="${TARGET_SERVICE:-core-service}"
 TARGET_HEALTH_URL="${TARGET_HEALTH_URL:-http://localhost:8001/health}"
 CRASH_REPORTS_DIR="${CRASH_REPORTS_DIR:-$PROJECT_ROOT/recovery-agent/data/crash_reports}"
+# This script always uses [TEST] reason → reports land in the tests/ subfolder
+WATCH_DIR="$CRASH_REPORTS_DIR/tests"
 
 # ── Colours (bash-3.2-compatible) ───────────────────────────────────────────
 GREEN=$'\033[0;32m'
@@ -82,10 +84,10 @@ LOG_LINES="$(docker logs --tail 5 "$TARGET_SERVICE" 2>&1 | wc -l | tr -d ' ')"
 ok "$TARGET_SERVICE running with ~$LOG_LINES recent log lines available"
 
 # ── Step 3: Snapshot existing crash reports ─────────────────────────────────
-step "3/6" "Snapshotting existing crash reports..."
-mkdir -p "$CRASH_REPORTS_DIR"
-BEFORE_COUNT="$(find "$CRASH_REPORTS_DIR" -maxdepth 1 -type f -name "${TARGET_SERVICE}_*.txt" 2>/dev/null | wc -l | tr -d ' ')"
-ok "existing reports for $TARGET_SERVICE: $BEFORE_COUNT"
+step "3/6" "Snapshotting existing test reports in $WATCH_DIR ..."
+mkdir -p "$WATCH_DIR"
+BEFORE_COUNT="$(find "$WATCH_DIR" -maxdepth 1 -type f -name "${TARGET_SERVICE}_*.txt" 2>/dev/null | wc -l | tr -d ' ')"
+ok "existing test reports for $TARGET_SERVICE: $BEFORE_COUNT"
 
 # ── Step 4: Trigger enable_fallback at CRITICAL ─────────────────────────────
 step "4/6" "Triggering enable_fallback (severity=CRITICAL, failure_count=5)..."
@@ -93,7 +95,7 @@ PAYLOAD=$(cat <<EOF
 {
   "action": "enable_fallback",
   "target_service": "$TARGET_SERVICE",
-  "reason": "Crash report capture test (manual trigger)",
+  "reason": "[TEST] Crash report capture test (manual trigger)",
   "severity": "CRITICAL",
   "failure_count": 5,
   "escalation_reason": "5 crashes in 10min — CRITICALLY UNSTABLE",
@@ -116,21 +118,21 @@ fi
 ok "recovery-agent returned 200"
 info "$RESPONSE_BODY"
 
-# ── Step 5: Verify a new crash report appeared ──────────────────────────────
-step "5/6" "Verifying new crash report was written..."
+# ── Step 5: Verify a new crash report appeared in tests/ subdir ─────────────
+step "5/6" "Verifying new crash report was written to tests/ subdir..."
 sleep 1   # give the recovery-agent a moment to flush the file
-AFTER_COUNT="$(find "$CRASH_REPORTS_DIR" -maxdepth 1 -type f -name "${TARGET_SERVICE}_*.txt" 2>/dev/null | wc -l | tr -d ' ')"
+AFTER_COUNT="$(find "$WATCH_DIR" -maxdepth 1 -type f -name "${TARGET_SERVICE}_*.txt" 2>/dev/null | wc -l | tr -d ' ')"
 
 if [[ "$AFTER_COUNT" -le "$BEFORE_COUNT" ]]; then
-  fail "no new crash report appeared (before=$BEFORE_COUNT after=$AFTER_COUNT). Check recovery-agent logs: docker logs recovery-agent | tail -30"
+  fail "no new test report appeared in $WATCH_DIR (before=$BEFORE_COUNT after=$AFTER_COUNT). Check recovery-agent logs: docker logs recovery-agent | tail -30"
 fi
 
-LATEST="$(find "$CRASH_REPORTS_DIR" -maxdepth 1 -type f -name "${TARGET_SERVICE}_*.txt" -exec stat -f '%m %N' {} \; 2>/dev/null \
+# macOS uses 'stat -f', Linux uses 'find -printf'. Try Linux first, fall back to macOS.
+LATEST="$(find "$WATCH_DIR" -maxdepth 1 -type f -name "${TARGET_SERVICE}_*.txt" -printf '%T@ %p\n' 2>/dev/null \
           | sort -rn | head -1 | cut -d' ' -f2-)"
 
 if [[ -z "$LATEST" ]] || [[ ! -f "$LATEST" ]]; then
-  # Fallback for Linux stat (different flags from macOS)
-  LATEST="$(find "$CRASH_REPORTS_DIR" -maxdepth 1 -type f -name "${TARGET_SERVICE}_*.txt" -printf '%T@ %p\n' 2>/dev/null \
+  LATEST="$(find "$WATCH_DIR" -maxdepth 1 -type f -name "${TARGET_SERVICE}_*.txt" -exec stat -f '%m %N' {} \; 2>/dev/null \
             | sort -rn | head -1 | cut -d' ' -f2-)"
 fi
 

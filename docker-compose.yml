@@ -115,8 +115,8 @@ services:
       CLOUDWATCH_NAMESPACE: "SelfHealingSystem"
       AWS_DEFAULT_REGION: "us-east-1"
       # ── S3 crash report storage (real incidents only) ──
-      # Set the bucket env var to enable; leave empty to keep reports local-only.
-      S3_CRASH_REPORTS_BUCKET: "${S3_CRASH_REPORTS_BUCKET:-}"
+      # S3_CRASH_REPORTS_BUCKET is loaded from monitor/.env (env_file above).
+      # Leave it unset/empty in monitor/.env to keep reports local-only.
       S3_CRASH_REPORTS_PREFIX: "incidents"
     volumes:
       # Mount the host Docker socket — required for docker CLI to work inside container

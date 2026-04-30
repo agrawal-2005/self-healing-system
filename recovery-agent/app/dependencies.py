@@ -30,6 +30,7 @@ _recovery_service = RecoveryService(
     ],
     history_repository   = _history_repository,
     cloudwatch_publisher = _cloudwatch_publisher,
+    crash_reports_dir    = settings.crash_reports_dir,
 )
 
 

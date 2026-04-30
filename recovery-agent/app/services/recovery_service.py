@@ -22,6 +22,7 @@ Phase 4 addition:
 """
 
 import logging
+import os
 import time
 from datetime import datetime, timezone
 
@@ -43,12 +44,15 @@ class RecoveryService:
         allowed_services: list[str],
         history_repository: RecoveryHistoryRepository,
         cloudwatch_publisher: CloudWatchMetricsPublisher,
+        crash_reports_dir: str = "/app/data/crash_reports",
     ) -> None:
         self.docker_executor      = docker_executor
         self.service_name         = service_name
         self.allowed_services     = allowed_services
         self.history_repository   = history_repository
         self.cloudwatch_publisher = cloudwatch_publisher
+        self.crash_reports_dir    = crash_reports_dir
+        os.makedirs(crash_reports_dir, exist_ok=True)
 
     def health(self) -> HealthResponse:
         return HealthResponse(status="healthy", service=self.service_name)
@@ -168,20 +172,77 @@ class RecoveryService:
         )
 
     def _enable_fallback(self, request: ActionRequest) -> ActionResponse:
-        """Stop the target container to force api-service to use fallback-service."""
+        """Stop the target container to force api-service to use fallback-service.
+
+        Before stopping, capture the container's last 200 log lines and write
+        them to a crash report file so developers can diagnose the root cause.
+        """
+        # ── Step 1: capture logs BEFORE stopping (logs are gone after docker rm) ─
+        self._write_crash_report(request)
+
+        # ── Step 2: stop the container ────────────────────────────────────────────
         cmd_result = self.docker_executor.stop(request.target_service)
         return ActionResponse(
             success=cmd_result.success,
             action=request.action,
             target_service=request.target_service,
             message=(
-                f"Fallback enabled: '{request.target_service}' stopped."
+                f"Fallback enabled: '{request.target_service}' stopped. "
+                f"Crash report saved to {self.crash_reports_dir}/"
                 if cmd_result.success
                 else f"Failed to stop '{request.target_service}'."
             ),
             command_result=cmd_result,
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
+
+    def _write_crash_report(self, request: ActionRequest) -> None:
+        """Capture the last 200 lines of container logs and write a crash report file.
+
+        File name: <service>_<UTC-timestamp>.txt
+        e.g.  core-service_2026-04-30T22-31-05Z.txt
+        """
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
+        filename = f"{request.target_service}_{ts}.txt"
+        filepath = os.path.join(self.crash_reports_dir, filename)
+
+        log_result = self.docker_executor.capture_logs(request.target_service, tail=200)
+
+        lines = []
+        lines.append("=" * 72)
+        lines.append(f"CRASH REPORT — {request.target_service}")
+        lines.append(f"Captured  : {ts}")
+        lines.append(f"Severity  : {request.severity or 'CRITICAL'}")
+        lines.append(f"Failures  : {request.failure_count or 'N/A'} consecutive crashes")
+        lines.append(f"Action    : {request.action.value} (enable_fallback triggered)")
+        lines.append(f"Reason    : {request.reason}")
+        if request.escalation_reason:
+            lines.append(f"Escalation: {request.escalation_reason}")
+        lines.append("=" * 72)
+        lines.append("")
+        lines.append("── CONTAINER LOGS (last 200 lines) ──")
+        lines.append("")
+
+        if log_result.success or log_result.stdout:
+            lines.append(log_result.stdout or "(empty stdout)")
+        if log_result.stderr:
+            # docker logs writes to stderr by default — this is the real output
+            lines.append(log_result.stderr)
+        if not log_result.success and not log_result.stdout and not log_result.stderr:
+            lines.append(f"(failed to capture logs: {log_result.error})")
+
+        lines.append("")
+        lines.append("── END OF REPORT ──")
+
+        try:
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines))
+            logger.info(
+                "RecoveryService: crash report saved → %s  severity=%s  failures=%s",
+                filepath, request.severity, request.failure_count,
+            )
+        except OSError as exc:
+            logger.error("RecoveryService: failed to write crash report → %s", exc)
 
     def _disable_fallback(self, request: ActionRequest) -> ActionResponse:
         """Start the target container to restore normal routing."""

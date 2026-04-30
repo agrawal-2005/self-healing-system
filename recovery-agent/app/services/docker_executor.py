@@ -99,3 +99,7 @@ class DockerExecutor:
     def start(self, container_name: str) -> CommandResult:
         """docker start <container_name>"""
         return self._run(["docker", "start", container_name])
+
+    def capture_logs(self, container_name: str, tail: int = 200) -> CommandResult:
+        """docker logs --tail <tail> <container_name>  — capture last N lines before stop."""
+        return self._run(["docker", "logs", "--tail", str(tail), container_name])

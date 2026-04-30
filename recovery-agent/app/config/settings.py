@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     recovery_token: str = "dev-token"
     allowed_services: str = "core-service"
     recovery_history_path: str = "/app/data/recovery_history.jsonl"
+    crash_reports_dir: str = "/app/data/crash_reports"
 
     # ── CloudWatch metrics ────────────────────────────────────────────────────
     # Set CLOUDWATCH_ENABLED=true (+ AWS credentials in env) to publish metrics.

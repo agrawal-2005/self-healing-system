@@ -25,6 +25,7 @@ import os
 from datetime import datetime, timezone
 
 import boto3
+from boto3.exceptions import S3UploadFailedError
 from botocore.exceptions import BotoCoreError, ClientError
 
 logger = logging.getLogger(__name__)
@@ -98,10 +99,17 @@ class S3CrashReportPublisher:
             uri = f"s3://{self.bucket}/{key}"
             logger.info("S3CrashReportPublisher: uploaded crash report → %s", uri)
             return uri
-        except (ClientError, BotoCoreError) as exc:
+        except (ClientError, BotoCoreError, S3UploadFailedError) as exc:
             # An S3 failure must never abort the recovery action.
             logger.warning(
                 "S3CrashReportPublisher: upload failed (bucket=%s key=%s) — %s",
                 self.bucket, key, exc,
+            )
+            return None
+        except Exception as exc:
+            # Defensive: anything else (auth errors, network) is also swallowed.
+            logger.warning(
+                "S3CrashReportPublisher: unexpected upload error (bucket=%s) — %s",
+                self.bucket, exc,
             )
             return None

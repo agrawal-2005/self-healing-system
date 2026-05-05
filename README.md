@@ -9,6 +9,8 @@
 ![EventBridge](https://img.shields.io/badge/AWS-EventBridge-FF4F8B?style=flat-square&logo=amazonaws&logoColor=white)
 ![CloudWatch](https://img.shields.io/badge/AWS-CloudWatch-FF9900?style=flat-square&logo=amazoncloudwatch&logoColor=white)
 ![EC2](https://img.shields.io/badge/AWS-EC2-FF9900?style=flat-square&logo=amazonec2&logoColor=white)
+![ECR](https://img.shields.io/badge/AWS-ECR-FF9900?style=flat-square&logo=amazonaws&logoColor=white)
+![S3](https://img.shields.io/badge/AWS-S3-569A31?style=flat-square&logo=amazons3&logoColor=white)
 ![pydantic](https://img.shields.io/badge/pydantic-settings-E92063?style=flat-square&logo=pydantic&logoColor=white)
 
 ---
@@ -157,6 +159,7 @@ This project was built incrementally across 8 phases, each adding a production-g
 | **Phase 7** | Multi-service platform — `services_config.json` registry, per-service strategies (restart/escalate/fallback), payment-service and movie-service added as real-world examples, 20-widget dashboard |
 | **Phase 8** | Config-driven gateway — api-service becomes a true generic proxy (`GET /{service_name}`). One `GenericServiceClient`, one `ServiceRegistry`, one `call()` method. Adding a new service = 1 JSON line, zero code changes. Monitor health checks parallelised with `asyncio.gather()` — cycle time = slowest single check, not sum. |
 | **Phase 9** | Crash report capture + production hardening — recovery-agent snapshots the last 200 container log lines on `enable_fallback`, writes them to `incidents/` (real) or `tests/` (synthetic) by reason prefix, and mirrors real reports to S3 (`s3://…/incidents/<service>/<date>/`) for AWS-console-accessible durable storage. CircuitBreaker is now thread-safe (`RLock`), JSONL writes use `fcntl.flock` so concurrent Lambda retries don't interleave, the recovery token uses `hmac.compare_digest`, and `target_service` is regex-validated as defence-in-depth. |
+| **Phase 10** | Image registry & immutable deploys — all 6 service images are built `linux/amd64`, tagged with both a release tag (e.g. `v1.0.0`) and `:latest`, and pushed to private **Amazon ECR** repos under `self-healing/<service>`. EC2 pulls images via the IAM-attached `AmazonEC2ContainerRegistryReadOnly` policy — no registry credentials on disk. A `docker-compose.ecr.yml` override file replaces every `build:` block with `image: ${ECR_REGISTRY}/self-healing/<svc>:${IMAGE_TAG:-latest}`, so the running stack on EC2 no longer rebuilds from source — it pulls the exact, scanned, content-addressed image that was tested. A systemd unit re-runs `deploy-from-ecr.sh` on every boot for self-healing at the deployment layer too. |
 
 ---
 
@@ -188,6 +191,8 @@ This project was built incrementally across 8 phases, each adding a production-g
 | **S3 Durable Crash Storage** | 9 | Real incident reports are mirrored to S3 with date-partitioned keys (`s3://<bucket>/incidents/<service>/<YYYY-MM-DD>/<file>.txt`). Survives EC2 restart/replacement, browsable in the AWS console, and lifecycle-rule-friendly (Glacier after 90d). Test reports are skipped to keep the bucket clean. |
 | **Concurrency Hardening** | 9 | CircuitBreaker state mutations protected by `threading.RLock`. JSONL audit-log appends serialized via `fcntl.flock(LOCK_EX)` so Lambda retries can't interleave records. |
 | **Defence-in-Depth** | 9 | `hmac.compare_digest` for the recovery token (no timing oracle). `target_service` regex-validated at the schema layer (`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`) so a bad allowlist can't escape the crash-report directory. Pooled `httpx.AsyncClient` with `follow_redirects=False` and JSON-decode failures surfaced as request failures (engages the breaker, not a 500 leak). |
+| **Private Image Registry (ECR)** | 10 | Six private ECR repos (`self-healing/api-service`, `…/core-service`, etc.) hold immutable, scanned images. Builds run `--platform linux/amd64` so Apple Silicon laptops produce x86_64 images that boot on EC2. Each release is double-tagged (`v1.2.3` + `latest`) so rollback is one re-pull away. `scanOnPush=true` runs CVE detection on every push. |
+| **Pull-Based Deploys** | 10 | EC2 deploys via `docker compose -f docker-compose.yml -f docker-compose.ecr.yml pull && up -d` — no `git pull`, no `docker build` on the box. The override file uses `build: !reset null` so Compose can't accidentally fall back to building from source. ECR auth is fetched per-deploy via `aws ecr get-login-password` against the EC2 IAM role; no static credentials are stored. A systemd unit re-runs the deploy script on every boot, so an instance replacement self-heals without operator action. |
 
 ---
 
@@ -203,6 +208,8 @@ This project was built incrementally across 8 phases, each adding a production-g
 | **Serverless Recovery** | AWS Lambda (Python 3.12) |
 | **Decision Engine** | SmartRecoveryPolicy + strategy-aware overrides (Phase 7) |
 | **Infrastructure** | AWS EC2 (t2.micro, Ubuntu 22.04) |
+| **Image Registry** | AWS ECR — private repos under `self-healing/*`, scan-on-push, IAM-only auth |
+| **Durable Crash Storage** | AWS S3 — date-partitioned incident reports |
 | **Dead-Letter Queue** | AWS SQS |
 | **Observability** | AWS CloudWatch (custom metrics + 20-widget dashboard) |
 | **Deployment** | AWS Systems Manager (SSM) send-command |
@@ -605,7 +612,11 @@ self-healing-system/
 │── ─── OTHER ──────────────────────────────────────────────────────────────
 │
 ├── demo-ui/index.html          # Single-file interactive demo (simulation)
-├── docker-compose.yml
+├── docker-compose.yml          # Local dev: builds images from source
+├── docker-compose.ecr.yml      # Phase 10: production override, pulls from ECR (build:!reset)
+├── scripts/
+│   ├── push-to-ecr.sh          # Phase 10: build linux/amd64 + push 6 images, double-tagged
+│   └── deploy-from-ecr.sh      # Phase 10: aws ecr login → compose pull → up -d (runs on EC2)
 ├── tests/scripts/
 └── docs/
 ```
@@ -636,58 +647,56 @@ self-healing-system/
 | CloudWatch Dashboard | `SelfHealingSystemDashboard` |
 | EC2 Instance | Ubuntu 22.04, ports 8000–8003, 8010, 8020 open |
 | S3 Bucket (optional, Phase 9) | `self-healing-crash-reports` — durable storage for incident reports. EC2 IAM role needs `s3:PutObject` on `<bucket>/incidents/*`. |
+| ECR Repositories (Phase 10) | Six repos under `self-healing/*` — `api-service`, `core-service`, `fallback-service`, `recovery-agent`, `payment-service`, `movie-service`. EC2 IAM role needs `AmazonEC2ContainerRegistryReadOnly`. |
 
 ---
 
-### Option A — Local (Docker Compose)
+### Option A — Local (Docker Compose, no AWS required)
+
+The fastest way to demo. Everything runs on your laptop — circuit breaker, fallback, recovery-agent, monitor — and you can trigger a crash and watch the system heal end-to-end without any AWS account.
 
 ```bash
 # 1. Clone
 git clone https://github.com/agrawal-2005/self-healing-system.git
 cd self-healing-system
 
-# 2. Start all 6 services (core, fallback, api, agent, payment, movie)
+# 2. Bring up all 6 services (core, fallback, api, recovery-agent, payment, movie)
 docker compose up --build -d
-docker compose ps   # all 6 should show (healthy)
+docker compose ps           # wait until every line shows "(healthy)"
 
-# 3. Configure AWS credentials
-cp .env.example monitor/.env
-# Edit monitor/.env:
-#   AWS_ACCESS_KEY_ID=...
-#   AWS_SECRET_ACCESS_KEY=...
-#   AWS_DEFAULT_REGION=us-east-1
+# 3. Smoke test — gateway should hit core-service
+curl -s http://localhost:8000/core-service | jq
+# { "source": "core-service", "degraded": false, "result": { ... } }
 
-# 4. Start the monitor (reads services_config.json automatically)
+# 4. Start the host-side monitor (parallel async health checks every 5s)
 cd monitor
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python3 monitor.py > /tmp/monitor.log 2>&1 &
+# Local-only demo: AWS credentials NOT required. CloudWatch publishing
+# is a no-op when CLOUDWATCH_ENABLED=false.
+CLOUDWATCH_ENABLED=false python3 monitor.py > /tmp/monitor.log 2>&1 &
 cd ..
 
-# 5. Deploy Lambda (Phase 7 — all 4 files + registry required)
-cd aws/lambda
-cp ../../services_config.json .
-zip recovery_handler.zip recovery_handler.py smart_recovery_policy.py rollback_manager.py services_config.json
+# 5. Trigger a crash on core-service and watch fallback engage
+curl -X POST http://localhost:8001/fail
+curl -s http://localhost:8000/core-service | jq
+# { "source": "fallback-service", "degraded": true }   ← circuit OPEN
 
-aws lambda update-function-code \
-  --function-name SelfHealingRecoveryHandler \
-  --zip-file fileb://recovery_handler.zip \
-  --region us-east-1
+# 6. Recover manually (no Lambda needed for the local demo)
+curl -X POST http://localhost:8001/recover
+sleep 35                                        # wait for HALF_OPEN probe
+curl -s http://localhost:8000/core-service | jq
+# { "source": "core-service", "degraded": false }      ← circuit CLOSED again
 
-# 6. Configure Lambda environment
-aws lambda update-function-configuration \
-  --function-name SelfHealingRecoveryHandler \
-  --environment "Variables={
-    RECOVERY_AGENT_URL=http://<YOUR_EC2_OR_NGROK_URL>:8003,
-    TARGET_SERVICE=core-service,
-    RECOVERY_TOKEN=dev-token,
-    MAX_RETRIES=3,
-    IMAGE_TAG=latest,
-    CLOUDWATCH_ENABLED=true,
-    CLOUDWATCH_NAMESPACE=SelfHealingSystem
-  }" \
-  --region us-east-1
+# 7. Tail the monitor to see what it saw
+tail -n 20 /tmp/monitor.log
+
+# 8. Stop everything
+pkill -f 'python3 monitor.py' || true
+docker compose down
 ```
+
+> **AWS-aware local mode:** Want EventBridge → Lambda → recovery-agent firing during the local demo? Set `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_DEFAULT_REGION` in `monitor/.env`, drop `CLOUDWATCH_ENABLED=false`, and follow the Lambda deploy steps in Option B. recovery-agent must be reachable from Lambda — easiest is `ngrok http 8003` and point `RECOVERY_AGENT_URL` at the ngrok URL.
 
 ---
 
@@ -742,6 +751,113 @@ aws lambda update-function-configuration \
   }" \
   --region us-east-1
 ```
+
+---
+
+### Option C — Pull from ECR instead of building on EC2 (Phase 10)
+
+Once the project's images are stored in ECR (one-time setup below), EC2 no longer needs `git pull` or local Docker builds — it just `docker compose pull`s the exact image that was tested on your laptop or in CI.
+
+> **Current state of this account's ECR:** the 6 repos under `self-healing/*` exist but are **empty** (images were deleted to keep the AWS bill at $0 between demos). Run `./scripts/push-to-ecr.sh v1.0.0` to repopulate them — the create-repo step is already done.
+
+#### One-time AWS setup
+
+```bash
+# 1. Create the 6 private repos
+REGION=us-east-1
+for repo in api-service core-service fallback-service recovery-agent payment-service movie-service; do
+  aws ecr create-repository \
+    --repository-name self-healing/$repo \
+    --region $REGION \
+    --image-scanning-configuration scanOnPush=true \
+    --image-tag-mutability MUTABLE
+done
+
+# 2. Allow the EC2 instance role to pull from ECR
+aws iam attach-role-policy \
+  --role-name SelfHealingEC2Role \
+  --policy-arn arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+```
+
+#### Build & push (laptop or CI)
+
+```bash
+# Builds linux/amd64 (so it runs on x86_64 EC2 even from Apple Silicon),
+# tags with the version arg + :latest, and pushes all 6 in one go.
+./scripts/push-to-ecr.sh v1.0.0
+```
+
+What the script does, per service:
+
+```text
+docker build --platform linux/amd64 \
+  -t <acct>.dkr.ecr.us-east-1.amazonaws.com/self-healing/<svc>:v1.0.0 \
+  -t <acct>.dkr.ecr.us-east-1.amazonaws.com/self-healing/<svc>:latest \
+  <build-context>
+docker push  <acct>.dkr.ecr.us-east-1.amazonaws.com/self-healing/<svc>:v1.0.0
+docker push  <acct>.dkr.ecr.us-east-1.amazonaws.com/self-healing/<svc>:latest
+```
+
+#### Deploy on EC2 (pull, don't build)
+
+```bash
+# On EC2 (or via SSM send-command):
+cd /home/ubuntu/self-healing-system
+./scripts/deploy-from-ecr.sh v1.0.0      # or no arg → :latest
+
+# Internally:
+#   aws ecr get-login-password | docker login …
+#   docker compose -f docker-compose.yml -f docker-compose.ecr.yml pull
+#   docker compose -f docker-compose.yml -f docker-compose.ecr.yml up -d --remove-orphans
+#   docker image prune -f
+```
+
+The override file `docker-compose.ecr.yml` is what flips every service from `build:` to `image:`:
+
+```yaml
+services:
+  api-service:
+    build: !reset null     # explicitly clear the inherited build: block (Compose v2.24+)
+    image: ${ECR_REGISTRY}/self-healing/api-service:${IMAGE_TAG:-latest}
+  # … same pattern for the other 5 services
+```
+
+#### Auto-pull on every EC2 boot (systemd)
+
+```bash
+sudo tee /etc/systemd/system/self-healing.service > /dev/null <<'EOF'
+[Unit]
+Description=Self-Healing System (pull from ECR)
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=ubuntu
+WorkingDirectory=/home/ubuntu/self-healing-system
+ExecStart=/home/ubuntu/self-healing-system/scripts/deploy-from-ecr.sh latest
+ExecStop=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.ecr.yml down
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now self-healing.service
+```
+
+After this, an instance restart (or replacement) re-pulls the latest images and brings the stack up — extending the project's self-healing posture down to the deployment layer itself.
+
+#### Why pull-based ECR over `git pull && docker build`
+
+| `git pull && docker build` (Options A/B) | `docker compose pull` from ECR (Option C) |
+|---|---|
+| Image rebuilt on EC2 every deploy — risk of "works on laptop, broken on prod" if base image, system libs, or Python wheels drift | EC2 pulls the exact image bytes that were built and tested on the laptop / CI |
+| EC2 needs source code, build toolchain, and network access to pip / apt mirrors | EC2 only needs Docker + ECR pull rights — smaller attack surface |
+| No image scanning | `scanOnPush=true` runs Inspector CVE scan on every push |
+| Rollback = `git checkout <old-sha> && docker compose up --build` (slow, may not be byte-identical) | Rollback = `IMAGE_TAG=v0.9.0 ./scripts/deploy-from-ecr.sh` (~seconds) |
+| Bandwidth-heavy on each deploy (full git clone of source + Python wheel downloads) | Layer-cached pulls — usually only the changed layer is fetched |
 
 ---
 

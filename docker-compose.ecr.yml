@@ -1,0 +1,38 @@
+# docker-compose.ecr.yml
+#
+# Override file used on EC2 (and anywhere images should come from ECR instead
+# of being built locally). Layered on top of docker-compose.yml.
+#
+# Usage:
+#   export ECR_REGISTRY=<acct>.dkr.ecr.us-east-1.amazonaws.com
+#   export IMAGE_TAG=v1.0.0      # or "latest"
+#   docker compose -f docker-compose.yml -f docker-compose.ecr.yml pull
+#   docker compose -f docker-compose.yml -f docker-compose.ecr.yml up -d
+#
+# `!reset null` is Compose v2.24+ syntax that explicitly clears the inherited
+# build: block — without it Compose may try to rebuild instead of pulling.
+
+services:
+  core-service:
+    build: !reset null
+    image: ${ECR_REGISTRY}/self-healing/core-service:${IMAGE_TAG:-latest}
+
+  fallback-service:
+    build: !reset null
+    image: ${ECR_REGISTRY}/self-healing/fallback-service:${IMAGE_TAG:-latest}
+
+  api-service:
+    build: !reset null
+    image: ${ECR_REGISTRY}/self-healing/api-service:${IMAGE_TAG:-latest}
+
+  recovery-agent:
+    build: !reset null
+    image: ${ECR_REGISTRY}/self-healing/recovery-agent:${IMAGE_TAG:-latest}
+
+  payment-service:
+    build: !reset null
+    image: ${ECR_REGISTRY}/self-healing/payment-service:${IMAGE_TAG:-latest}
+
+  movie-service:
+    build: !reset null
+    image: ${ECR_REGISTRY}/self-healing/movie-service:${IMAGE_TAG:-latest}
